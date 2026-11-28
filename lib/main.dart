@@ -1554,10 +1554,26 @@ class _ChatPageState extends State<ChatPage> {
   final _input = TextEditingController();
   late Future<List<Map<String, dynamic>>> _messages;
   bool _sending = false;
+  RealtimeChannel? _channel;
   @override
-  void initState() { super.initState(); _messages = _load(); }
+  void initState() {
+    super.initState();
+    _messages = _load();
+    _channel = Supabase.instance.client.channel('chat-' + widget.conversationId)
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'messages',
+        filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'conversation_id', value: widget.conversationId),
+        callback: (_) { if (mounted) setState(() => _messages = _load()); },
+      )..subscribe();
+  }
   @override
-  void dispose() { _input.dispose(); super.dispose(); }
+  void dispose() {
+    _input.dispose();
+    if (_channel != null) Supabase.instance.client.removeChannel(_channel!);
+    super.dispose();
+  }
   Future<List<Map<String, dynamic>>> _load() async {
     final client = Supabase.instance.client;
     final rows = await client.from('messages').select('id, sender_id, body, created_at, read_at')
