@@ -102,7 +102,7 @@ class _MainScreenState extends State<MainScreen> {
               tab = 0;
             });
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('تم رفع الفيديو. سيظهر عندك بحالة قيد المراجعة 💜')),
+              const SnackBar(content: Text('تم نشر الفيديو بنجاح على VEDORO 💜')),
             );
           }
         },
@@ -220,7 +220,7 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
         'caption': _caption.text.trim(),
         'media_path': path,
         'visibility': 'public',
-        'moderation_status': 'pending',
+        'moderation_status': 'approved',
       });
 
       if (!mounted) return;
@@ -271,7 +271,7 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
               ),
             ),
             const SizedBox(height: 8),
-            const Text('سيُرفع الفيديو إلى التخزين الخاص ويُرسل للمراجعة قبل ظهوره للآخرين.',
+            const Text('سيُنشر الفيديو مباشرة بعد رفعه. أبلغ عن أي محتوى مخالف حتى تتم مراجعته.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white54, fontSize: 12)),
             const SizedBox(height: 14),
@@ -500,6 +500,32 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     });
   }
 
+  Future<void> _reportPost() async {
+    final postId = widget.video.postId;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (postId == null || user == null) return;
+    final reasons = ['محتوى مسيء أو تنمّر', 'عنف أو محتوى خطير', 'محتوى جنسي', 'احتيال أو انتحال', 'حقوق ملكية', 'سبب آخر'];
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF171720),
+      builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Padding(padding: EdgeInsets.all(16), child: Text('الإبلاغ عن الفيديو', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+        ...reasons.map((item) => ListTile(title: Text(item), onTap: () => Navigator.pop(ctx, item))),
+      ])),
+    );
+    if (reason == null) return;
+    try {
+      await Supabase.instance.client.from('content_reports').insert({
+        'reporter_id': user.id, 'post_id': postId, 'reason': reason,
+      });
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('وصل بلاغك، شكراً لمساعدتنا في حماية المجتمع.')),
+      );
+    } catch (e) {
+      if (mounted) _showActionError('تعذر إرسال البلاغ: $e');
+    }
+  }
+
   Future<void> _loadComments(StateSetter refreshSheet) async {
     final postId = widget.video.postId;
     if (postId == null) return;
@@ -670,6 +696,8 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
             _ActionButton(icon: Icons.share_outlined, label: 'مشاركة', onTap: () async { await Clipboard.setData(ClipboardData(text: widget.video.url)); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ رابط الفيديو'))); }),
             const SizedBox(height: 20),
             _ActionButton(icon: muted ? Icons.volume_off : Icons.music_note, label: muted ? 'صامت' : 'الصوت', onTap: () async { setState(() => muted = !muted); if (controller?.value.isInitialized == true) await controller!.setVolume(muted ? 0 : 1); }),
+            const SizedBox(height: 18),
+            _ActionButton(icon: Icons.flag_outlined, label: 'إبلاغ', onTap: _reportPost),
           ]),
         ),
         if (widget.video.status == 'pending')
