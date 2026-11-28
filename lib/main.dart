@@ -1514,8 +1514,8 @@ class _ExplorePageState extends State<ExplorePage> {
     final client = Supabase.instance.client;
     final since = DateTime.now().subtract(const Duration(days: 7)).toUtc().toIso8601String();
     final rows = await client.from('post_hashtags')
-      .select('hashtag, post_id, posts!inner(id)')
-      .gte('created_at', since)
+      .select('hashtag, post_id, posts!inner(created_at)')
+      .gte('posts.created_at', since)
       .limit(500);
     final counts = <String, int>{};
     for (final row in rows) {
@@ -1708,9 +1708,12 @@ class _ExplorePageState extends State<ExplorePage> {
         ],
         selected: {_tab},
         onSelectionChanged: (value) {
+          final nextTab = value.first;
           setState(() {
-            _tab = value.first;
-            _onSearch(_search.text);
+            _tab = nextTab;
+            if (nextTab == 0) _results = _searchUsers(_search.text);
+            if (nextTab == 1) _results = _searchHashtags(_search.text);
+            if (nextTab == 2) _results = _searchVideos(_search.text);
           });
         },
         showSelectedIcon: false,
