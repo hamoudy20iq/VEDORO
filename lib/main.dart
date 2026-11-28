@@ -2557,7 +2557,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<Map<String, dynamic>> _loadProfile() async {
     final user = Supabase.instance.client.auth.currentUser!;
     final row = await Supabase.instance.client.from('profiles')
-      .select('username, display_name, bio, avatar_path')
+      .select('username, display_name, bio, avatar_path, is_private')
       .eq('id', user.id).maybeSingle();
     return row ?? {
       'username': user.userMetadata?['username'] ?? 'user',
@@ -2772,6 +2772,23 @@ class _ProfilePageState extends State<ProfilePage> {
               const SizedBox(height: 8),
               Text('@$username', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
               Text(displayName, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              if (p['is_private'] == true)
+                Padding(
+                  padding: const EdgeInsets.only(top: 5),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: .13),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: accent.withValues(alpha: .35)),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.lock_outline_rounded, color: accent, size: 13),
+                      SizedBox(width: 5),
+                      Text('حساب خاص', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.w600)),
+                    ]),
+                  ),
+                ),
               if (bio.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(28, 5, 28, 0),
