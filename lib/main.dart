@@ -820,6 +820,227 @@ class VedoroAvatar extends StatelessWidget {
   }
 }
 
+
+class StoryTray extends StatefulWidget {
+  const StoryTray({super.key});
+  @override
+  State<StoryTray> createState() => _StoryTrayState();
+}
+
+class _StoryTrayState extends State<StoryTray> {
+  late Future<List<Map<String, dynamic>>> _stories;
+  bool _uploading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _stories = _loadStories();
+  }
+
+  Future<List<Map<String, dynamic>>> _loadStories() async {
+    final client = Supabase.instance.client;
+    final rows = await client.from('stories')
+      .select('id, user_id, media_path, caption, created_at, expires_at')
+      .gt('expires_at', DateTime.now().toUtc().toIso8601String())
+      .order('created_at', ascending: false).limit(100);
+    final stories = List<Map<String, dynamic>>.from(rows);
+    final ids = stories.map((x) => x['user_id'].toString()).toSet().toList();
+    if (ids.isNotEmpty) {
+      final profiles = await client.from('profiles')
+        .select('id, username, avatar_path').inFilter('id', ids);
+      final byId = {for (final p in profiles) p['id'].toString(): p};
+      for (final story in stories) {
+        story['profile'] = byId[story['user_id'].toString()];
+      }
+    }
+    return stories;
+  }
+
+  Future<void> _addStory() async {
+    if (_uploading) return;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery, imageQuality: 88, maxWidth: 1600,
+    );
+    if (picked == null || !mounted) return;
+    final file = File(picked.path);
+    final size = await file.length();
+    if (size > 10 * 1024 * 1024) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('حجم صورة القصة يجب ألا يتجاوز 10 ميغابايت')),
+      );
+      return;
+    }
+    final ext = picked.path.split('.').last.toLowerCase();
+    final mime = switch (ext) {
+      'png' => 'image/png',
+      'webp' => 'image/webp',
+      'jpg' || 'jpeg' => 'image/jpeg',
+      _ => '',
+    };
+    if (mime.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('الصيغ المدعومة: JPG وPNG وWEBP')),
+      );
+      return;
+    }
+    setState(() => _uploading = true);
+    final path = '${user.id}/${DateTime.now().microsecondsSinceEpoch}.$ext';
+    var uploaded = false;
+    try {
+      final client = Supabase.instance.client;
+      await client.storage.from('vedoro-stories').upload(
+        path, file, fileOptions: FileOptions(contentType: mime, upsert: false),
+      );
+      uploaded = true;
+      await client.from('stories').insert({
+        'user_id': user.id,
+        'media_path': path,
+        'media_type': 'image',
+        'caption': '',
+        'expires_at': DateTime.now().toUtc().add(const Duration(hours: 24)).toIso8601String(),
+      });
+      if (mounted) {
+        setState(() => _stories = _loadStories());
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('نُشرت قصتك لمدة 24 ساعة 💜')),
+        );
+      }
+    } catch (e) {
+      if (uploaded) {
+        try { await Supabase.instance.client.storage.from('vedoro-stories').remove([path]); } catch (_) {}
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر نشر القصة: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 112,
+    child: FutureBuilder<List<Map<String, dynamic>>>(
+      future: _stories,
+      builder: (context, snapshot) {
+        final all = snapshot.data ?? [];
+        final grouped = <String, List<Map<String, dynamic>>>{};
+        for (final story in all) {
+          grouped.putIfAbsent(story['user_id'].toString(), () => []).add(story);
+        }
+        final users = grouped.entries.toList();
+        final uid = Supabase.instance.client.auth.currentUser?.id;
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('القصص', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Expanded(child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: [
+              GestureDetector(
+                onTap: _uploading ? null : _addStory,
+                child: SizedBox(width: 72, child: Column(children: [
+                  Stack(alignment: Alignment.bottomRight, children: [
+                    const VedoroAvatar(radius: 25),
+                    Container(width: 20, height: 20,
+                      decoration: const BoxDecoration(color: accent, shape: BoxShape.circle),
+                      child: const Icon(Icons.add, size: 15, color: Colors.white)),
+                  ]),
+                  const SizedBox(height: 5),
+                  Text(_uploading ? 'يرفع...' : 'قصتك', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
+                ])),
+              ),
+              ...users.where((entry) => entry.key != uid).map((entry) {
+                final first = entry.value.first;
+                final profile = first['profile'] as Map<String, dynamic>?;
+                final username = (profile?['username'] ?? 'user').toString();
+                return GestureDetector(
+                  onTap: () => Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => StoryViewerPage(stories: entry.value),
+                  )).then((_) { if (mounted) setState(() => _stories = _loadStories()); }),
+                  child: SizedBox(width: 72, child: Column(children: [
+                    Container(padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: accent, width: 2)),
+                      child: VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 23)),
+                    const SizedBox(height: 5),
+                    Text(username, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
+                  ])),
+                );
+              }),
+            ],
+          )),
+        ]);
+      },
+    ),
+  );
+}
+
+class StoryViewerPage extends StatefulWidget {
+  const StoryViewerPage({super.key, required this.stories});
+  final List<Map<String, dynamic>> stories;
+  @override
+  State<StoryViewerPage> createState() => _StoryViewerPageState();
+}
+
+class _StoryViewerPageState extends State<StoryViewerPage> {
+  int _index = 0;
+  late Future<String> _url;
+
+  @override
+  void initState() {
+    super.initState();
+    _setUrl();
+  }
+
+  void _setUrl() {
+    final path = widget.stories[_index]['media_path'].toString();
+    _url = Supabase.instance.client.storage.from('vedoro-stories').createSignedUrl(path, 600);
+  }
+
+  void _next() {
+    if (_index + 1 >= widget.stories.length) { Navigator.pop(context); return; }
+    setState(() { _index++; _setUrl(); });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final story = widget.stories[_index];
+    final profile = story['profile'] as Map<String, dynamic>?;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        title: Row(children: [
+          VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 17),
+          const SizedBox(width: 9),
+          Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(fontSize: 14)),
+        ]),
+      ),
+      body: GestureDetector(
+        onTap: _next,
+        child: FutureBuilder<String>(
+          future: _url,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) return const Center(child: Text('تعذر تحميل القصة'));
+            if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: accent));
+            return Stack(fit: StackFit.expand, children: [
+              InteractiveViewer(child: Center(child: Image.network(snapshot.data!, fit: BoxFit.contain))),
+              Positioned(top: 12, left: 16, right: 16,
+                child: LinearProgressIndicator(value: (_index + 1) / widget.stories.length,
+                  backgroundColor: Colors.white24, color: accent)),
+              if ((story['caption'] ?? '').toString().isNotEmpty)
+                Positioned(bottom: 35, left: 20, right: 20,
+                  child: Text(story['caption'].toString(), textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
+            ]);
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class ExplorePage extends StatefulWidget {
   const ExplorePage({super.key});
   @override
@@ -862,7 +1083,9 @@ class _ExplorePageState extends State<ExplorePage> {
     padding: const EdgeInsets.all(18),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('اكتشف', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
+      const StoryTray(),
+      const SizedBox(height: 10),
       TextField(
         controller: _search,
         onChanged: _onSearch,
