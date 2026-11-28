@@ -1839,16 +1839,6 @@ class _ChatPageState extends State<ChatPage> {
           ),
         ]),
       )),
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: _reactionEmojis.map((emoji) => InkWell(
-            onTap: () { Navigator.pop(ctx); _toggleReaction(messageId, emoji); },
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Text(emoji, style: const TextStyle(fontSize: 30)),
-            ),
-          )).toList(),
-        ),
-      )),
     );
   }
   Future<void> _pickAndSendMedia(bool video) async {
