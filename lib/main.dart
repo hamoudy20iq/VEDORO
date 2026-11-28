@@ -1091,13 +1091,68 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<Map<String, dynamic>> _loadProfile() async {
     final user = Supabase.instance.client.auth.currentUser!;
     final row = await Supabase.instance.client.from('profiles')
-      .select('username, display_name, bio')
+      .select('username, display_name, bio, avatar_path')
       .eq('id', user.id).maybeSingle();
     return row ?? {
       'username': user.userMetadata?['username'] ?? 'user',
       'display_name': user.userMetadata?['display_name'] ?? 'عضو جديد',
       'bio': '',
     };
+  }
+
+
+  Future<void> _changeAvatar() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null || _editing) return;
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+        maxWidth: 1200,
+      );
+      if (picked == null || !mounted) return;
+      final file = File(picked.path);
+      final size = await file.length();
+      if (size > 5 * 1024 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('حجم الصورة يجب أن يكون أقل من 5 ميغابايت')),
+        );
+        return;
+      }
+      final ext = picked.path.split('.').last.toLowerCase();
+      const types = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'};
+      final mime = types[ext];
+      if (mime == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('الصيغ المدعومة: JPG و PNG و WEBP')),
+        );
+        return;
+      }
+      setState(() => _editing = true);
+      final path = '${user.id}/${DateTime.now().microsecondsSinceEpoch}.$ext';
+      final storage = Supabase.instance.client.storage.from('vedoro-avatars');
+      await storage.upload(
+        path,
+        file,
+        fileOptions: FileOptions(contentType: mime, upsert: false),
+      );
+      final oldPath = (_profile is Future ? null : null);
+      await Supabase.instance.client.from('profiles').update({
+        'avatar_path': path,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', user.id);
+      if (!mounted) return;
+      setState(() => _profile = _loadProfile());
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تحديث صورتك الشخصية 💜')),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تغيير الصورة: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _editing = false);
+    }
   }
 
   Future<void> _editProfile(Map<String, dynamic> current) async {
@@ -1167,7 +1222,40 @@ class _ProfilePageState extends State<ProfilePage> {
     final user = Supabase.instance.client.auth.currentUser;
     return SafeArea(child: Column(children: [
       const SizedBox(height: 24),
-      const CircleAvatar(radius: 46, backgroundColor: accent, child: Icon(Icons.person, size: 48, color: Colors.white)),
+      FutureBuilder<Map<String, dynamic>>(
+        future: _profile,
+        builder: (context, snapshot) {
+          final path = snapshot.data?['avatar_path']?.toString();
+          final url = path == null || path.isEmpty
+              ? null
+              : Supabase.instance.client.storage.from('vedoro-avatars').getPublicUrl(path);
+          return Stack(
+            children: [
+              CircleAvatar(
+                radius: 48,
+                backgroundColor: accent,
+                backgroundImage: url == null ? null : NetworkImage(url),
+                child: url == null ? const Icon(Icons.person, size: 48, color: Colors.white) : null,
+              ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Material(
+                  color: accent,
+                  shape: const CircleBorder(),
+                  child: IconButton(
+                    tooltip: 'تغيير الصورة الشخصية',
+                    onPressed: _editing ? null : _changeAvatar,
+                    icon: const Icon(Icons.camera_alt, size: 18, color: Colors.white),
+                    constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
       const SizedBox(height: 12),
       FutureBuilder<Map<String, dynamic>>(
         future: _profile,
