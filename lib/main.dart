@@ -448,6 +448,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   bool failed = false;
   bool muted = false;
   bool saved = false;
+  bool savingBusy = false;
   final List<String> comments = [];
   bool commentsLoading = false;
   bool actionBusy = false;
@@ -459,6 +460,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     following = widget.video.isFollowing;
     likeCount = widget.video.likeCount;
     commentCount = widget.video.commentCount;
+    _loadSavedState();
     controller = VideoPlayerController.networkUrl(Uri.parse(widget.video.url))
       ..setLooping(true)
       ..initialize().then((_) {
@@ -498,6 +500,44 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
       }
       showControls = true;
     });
+  }
+
+  Future<void> _loadSavedState() async {
+    final postId = widget.video.postId;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (postId == null || user == null) return;
+    try {
+      final row = await Supabase.instance.client.from('saved_posts')
+        .select('post_id').eq('user_id', user.id).eq('post_id', postId).maybeSingle();
+      if (mounted) setState(() => saved = row != null);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleSaved() async {
+    final postId = widget.video.postId;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (postId == null || user == null || savingBusy) return;
+    final wasSaved = saved;
+    setState(() { saved = !wasSaved; savingBusy = true; });
+    try {
+      if (wasSaved) {
+        await Supabase.instance.client.from('saved_posts')
+          .delete().eq('user_id', user.id).eq('post_id', postId);
+      } else {
+        await Supabase.instance.client.from('saved_posts')
+          .insert({'user_id': user.id, 'post_id': postId});
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(wasSaved ? 'أزلنا الفيديو من المحفوظات' : 'انحفظ الفيديو بالمفضلة 💜')),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => saved = wasSaved);
+        _showActionError('تعذر حفظ الفيديو: $e');
+      }
+    } finally {
+      if (mounted) setState(() => savingBusy = false);
+    }
   }
 
   Future<void> _reportPost() async {
@@ -691,7 +731,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
             const SizedBox(height: 20),
             _ActionButton(icon: Icons.mode_comment_outlined, label: '$commentCount', onTap: showComments),
             const SizedBox(height: 20),
-            _ActionButton(icon: saved ? Icons.bookmark : Icons.bookmark_border, label: saved ? 'محفوظ' : 'حفظ', color: saved ? accent : Colors.white, onTap: () => setState(() => saved = !saved)),
+            _ActionButton(icon: saved ? Icons.bookmark : Icons.bookmark_border, label: saved ? 'محفوظ' : 'حفظ', color: saved ? accent : Colors.white, onTap: _toggleSaved),
             const SizedBox(height: 20),
             _ActionButton(icon: Icons.share_outlined, label: 'مشاركة', onTap: () async { await Clipboard.setData(ClipboardData(text: widget.video.url)); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ رابط الفيديو'))); }),
             const SizedBox(height: 20),
@@ -849,15 +889,185 @@ class _ExplorePageState extends State<ExplorePage> {
   ));
 }
 
-class MessagesPage extends StatelessWidget {
+class MessagesPage extends StatefulWidget {
   const MessagesPage({super.key});
   @override
+  State<MessagesPage> createState() => _MessagesPageState();
+}
+class _MessagesPageState extends State<MessagesPage> {
+  late Future<List<Map<String, dynamic>>> _chats;
+  @override
+  void initState() { super.initState(); _chats = _loadChats(); }
+
+  Future<List<Map<String, dynamic>>> _loadChats() async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser!.id;
+    final memberships = await client.from('conversation_members')
+      .select('conversation_id').eq('user_id', uid);
+    final ids = memberships.map((x) => x['conversation_id'] as String).toList();
+    if (ids.isEmpty) return [];
+    final messages = await client.from('messages')
+      .select('conversation_id, body, sender_id, created_at')
+      .inFilter('conversation_id', ids).order('created_at', ascending: false).limit(100);
+    final latest = <String, Map<String, dynamic>>{};
+    for (final row in messages) {
+      latest.putIfAbsent(row['conversation_id'] as String, () => Map<String, dynamic>.from(row));
+    }
+    return latest.values.toList();
+  }
+
+  Future<void> _newChat() async {
+    final client = Supabase.instance.client;
+    final query = TextEditingController();
+    final chosen = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context, isScrollControlled: true, backgroundColor: const Color(0xFF171720),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, refresh) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('ابدأ محادثة جديدة', style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            TextField(controller: query, autofocus: true, onChanged: (_) => refresh(() {}),
+              decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'اكتب اسم المستخدم')),
+            const SizedBox(height: 8),
+            SizedBox(height: 250, child: FutureBuilder<List<Map<String, dynamic>>>(
+              future: client.from('profiles').select('id, username').ilike('username', '%${query.text.trim()}%').limit(20)
+                .then((rows) => List<Map<String, dynamic>>.from(rows).where((r) => r['id'] != client.auth.currentUser!.id).toList()),
+              builder: (ctx, snap) {
+                if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accent));
+                return ListView(children: (snap.data ?? []).map((u) => ListTile(
+                  leading: const CircleAvatar(child: Icon(Icons.person)),
+                  title: Text('@${u['username']}'),
+                  onTap: () => Navigator.pop(ctx, u),
+                )).toList());
+              },
+            )),
+          ]),
+        ),
+      )),
+    );
+    query.dispose();
+    if (chosen == null || !mounted) return;
+    try {
+      final uid = client.auth.currentUser!.id;
+      final conversation = await client.from('conversations')
+        .insert({'created_by': uid, 'is_group': false}).select('id').single();
+      final conversationId = conversation['id'] as String;
+      await client.from('conversation_members').insert([
+        {'conversation_id': conversationId, 'user_id': uid},
+        {'conversation_id': conversationId, 'user_id': chosen['id']},
+      ]);
+      if (!mounted) return;
+      Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(
+        conversationId: conversationId, title: '@${chosen['username']}',
+      ))).then((_) { if (mounted) setState(() => _chats = _loadChats()); });
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر بدء المحادثة: $e')));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) => SafeArea(child: Column(children: [
-    const Padding(padding: EdgeInsets.all(20), child: Align(alignment: Alignment.centerRight, child: Text('الرسائل', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)))),
-    const ListTile(leading: CircleAvatar(child: Icon(Icons.person)), title: Text('فريق VEDORO'), subtitle: Text('أهلاً بك في مجتمع VEDORO'), trailing: Text('')),
-    const Divider(color: Colors.white12),
-    const Expanded(child: Center(child: Text('محادثاتك الخاصة ستظهر هنا بعد تسجيل الدخول وربط الرسائل.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)))),
+    Padding(padding: const EdgeInsets.fromLTRB(20, 18, 16, 12), child: Row(children: [
+      const Expanded(child: Text('الرسائل', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold))),
+      IconButton(onPressed: _newChat, icon: const Icon(Icons.edit_square, color: accent), tooltip: 'محادثة جديدة'),
+    ])),
+    Expanded(child: FutureBuilder<List<Map<String, dynamic>>>(
+      future: _chats,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: accent));
+        if (snap.hasError) return Center(child: Text('تعذر تحميل المحادثات: ${snap.error}'));
+        final chats = snap.data ?? [];
+        if (chats.isEmpty) return const Center(child: Text('ما عندك محادثات بعد. اضغط زر القلم لبدء محادثة.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)));
+        return ListView.separated(
+          itemCount: chats.length, separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+          itemBuilder: (context, i) {
+            final item = chats[i];
+            return ListTile(
+              leading: const CircleAvatar(backgroundColor: accent, child: Icon(Icons.person, color: Colors.white)),
+              title: const Text('محادثة VEDORO'),
+              subtitle: Text(item['body'].toString(), maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(
+                conversationId: item['conversation_id'].toString(), title: 'محادثة',
+              ))).then((_) { if (mounted) setState(() => _chats = _loadChats()); }),
+            );
+          },
+        );
+      },
+    )),
   ]));
+}
+
+class ChatPage extends StatefulWidget {
+  const ChatPage({super.key, required this.conversationId, required this.title});
+  final String conversationId;
+  final String title;
+  @override
+  State<ChatPage> createState() => _ChatPageState();
+}
+class _ChatPageState extends State<ChatPage> {
+  final _input = TextEditingController();
+  late Future<List<Map<String, dynamic>>> _messages;
+  bool _sending = false;
+  @override
+  void initState() { super.initState(); _messages = _load(); }
+  @override
+  void dispose() { _input.dispose(); super.dispose(); }
+  Future<List<Map<String, dynamic>>> _load() async {
+    final rows = await Supabase.instance.client.from('messages').select('id, sender_id, body, created_at')
+      .eq('conversation_id', widget.conversationId).order('created_at');
+    return List<Map<String, dynamic>>.from(rows);
+  }
+  Future<void> _send() async {
+    final body = _input.text.trim();
+    final user = Supabase.instance.client.auth.currentUser;
+    if (body.isEmpty || user == null || _sending) return;
+    setState(() => _sending = true);
+    try {
+      await Supabase.instance.client.from('messages').insert({
+        'conversation_id': widget.conversationId, 'sender_id': user.id, 'body': body,
+      });
+      _input.clear();
+      if (mounted) setState(() => _messages = _load());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر إرسال الرسالة: $e')));
+    } finally { if (mounted) setState(() => _sending = false); }
+  }
+  @override
+  Widget build(BuildContext context) {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: Column(children: [
+        Expanded(child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _messages,
+          builder: (context, snap) {
+            if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accent));
+            final rows = snap.data!;
+            return ListView.builder(
+              padding: const EdgeInsets.all(14), itemCount: rows.length,
+              itemBuilder: (context, i) {
+                final mine = rows[i]['sender_id'] == uid;
+                return Align(alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 5), padding: const EdgeInsets.all(12),
+                    constraints: const BoxConstraints(maxWidth: 280),
+                    decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
+                    child: Text(rows[i]['body'].toString()),
+                  ),
+                );
+              },
+            );
+          },
+        )),
+        SafeArea(child: Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 12), child: Row(children: [
+          Expanded(child: TextField(controller: _input, textInputAction: TextInputAction.send,
+            onSubmitted: (_) => _send(), decoration: InputDecoration(hintText: 'اكتب رسالة...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
+          IconButton(onPressed: _sending ? null : _send, icon: const Icon(Icons.send, color: accent)),
+        ]))),
+      ]),
+    );
+  }
 }
 
 class ProfilePage extends StatefulWidget {
@@ -933,7 +1143,16 @@ class _ProfilePageState extends State<ProfilePage> {
             )
           : const SizedBox.shrink(),
       ),
-      const Expanded(child: Center(child: Text('إحصائيات حسابك تتحدث من قاعدة البيانات مباشرة.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)))),
+      Expanded(child: DefaultTabController(
+        length: 2,
+        child: Column(children: [
+          const TabBar(tabs: [Tab(icon: Icon(Icons.grid_on), text: 'فيديوهاتي'), Tab(icon: Icon(Icons.bookmarks_outlined), text: 'المحفوظات')]),
+          Expanded(child: TabBarView(children: [
+            _ProfilePostList(savedOnly: false),
+            _ProfilePostList(savedOnly: true),
+          ])),
+        ]),
+      )),
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
         child: OutlinedButton.icon(
@@ -948,6 +1167,44 @@ class _ProfilePageState extends State<ProfilePage> {
     ]));
   }
 }
+class _ProfilePostList extends StatelessWidget {
+  const _ProfilePostList({required this.savedOnly});
+  final bool savedOnly;
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser!.id;
+    if (savedOnly) {
+      final saved = await client.from('saved_posts').select('post_id, posts(id, caption, media_path, author_id)')
+        .eq('user_id', uid).order('created_at', ascending: false);
+      return saved.map((x) => Map<String, dynamic>.from(x['posts'] as Map)).toList();
+    }
+    final rows = await client.from('posts').select('id, caption, media_path, author_id')
+      .eq('author_id', uid).order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<Map<String, dynamic>>>(
+    future: _load(),
+    builder: (context, snap) {
+      if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: accent));
+      if (snap.hasError) return Center(child: Text('تعذر تحميل القائمة: ${snap.error}'));
+      final rows = snap.data ?? [];
+      if (rows.isEmpty) return Center(child: Text(savedOnly ? 'ما عندك فيديوهات محفوظة بعد' : 'ما نشرت فيديوهات بعد', style: const TextStyle(color: Colors.white54)));
+      return ListView.separated(
+        padding: const EdgeInsets.all(12), itemCount: rows.length,
+        separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+        itemBuilder: (context, i) => ListTile(
+          leading: const Icon(Icons.play_circle_outline, color: accent, size: 34),
+          title: Text((rows[i]['caption'] ?? 'فيديو بدون وصف').toString(), maxLines: 2, overflow: TextOverflow.ellipsis),
+          subtitle: Text(savedOnly ? 'ضمن المحفوظات' : 'منشورك'),
+        ),
+      );
+    },
+  );
+}
+
 class AdminReviewPage extends StatefulWidget {
   const AdminReviewPage({super.key});
   @override
