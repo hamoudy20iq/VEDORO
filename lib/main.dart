@@ -2832,10 +2832,23 @@ class _ProfilePageState extends State<ProfilePage> {
               ]),
               Text(displayName, style: const TextStyle(color: Colors.white70, fontSize: 13)),
               if (p['is_verified'] != true && p['verification_status'] != 'pending')
-                TextButton.icon(
-                  onPressed: _requestVerification,
-                  icon: const Icon(Icons.verified_outlined, size: 17),
-                  label: const Text('طلب توثيق الحساب'),
+                FutureBuilder<Map<String, int>>(
+                  future: _stats,
+                  builder: (context, statsSnapshot) {
+                    final followers = statsSnapshot.data?['followers'] ?? 0;
+                    if (followers >= 100000) {
+                      return TextButton.icon(
+                        onPressed: _requestVerification,
+                        icon: const Icon(Icons.verified_outlined, size: 17),
+                        label: const Text('أنت مؤهل — اطلب توثيق الحساب'),
+                      );
+                    }
+                    return const Padding(
+                      padding: EdgeInsets.only(top: 6),
+                      child: Text('التوثيق متاح عند الوصول إلى 100,000 متابع',
+                        style: TextStyle(color: Colors.white38, fontSize: 11)),
+                    );
+                  },
                 ),
               if (p['verification_status'] == 'pending')
                 const Padding(
