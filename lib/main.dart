@@ -312,7 +312,7 @@ class _FeedScreenState extends State<FeedScreen> {
     final user = client.auth.currentUser;
     if (user == null) return [];
     final rows = await client.from('posts')
-        .select('id, author_id, caption, media_path, moderation_status')
+        .select('id, author_id, caption, media_path, moderation_status, created_at')
         .eq('visibility', 'public')
         .or('moderation_status.eq.approved,author_id.eq.${user.id}')
         .order('created_at', ascending: false)
