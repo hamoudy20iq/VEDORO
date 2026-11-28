@@ -2085,7 +2085,7 @@ class _ChatPageState extends State<ChatPage> {
                             ),
                           ),
                       ]))),
-                    )),
+                    ),
                     if (mine) ...[const SizedBox(width: 7), VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 15)],
                   ]));
               },
