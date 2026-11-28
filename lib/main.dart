@@ -762,23 +762,91 @@ class ExplorePage extends StatefulWidget {
   State<ExplorePage> createState() => _ExplorePageState();
 }
 class _ExplorePageState extends State<ExplorePage> {
-  String query = '';
-  final creators = const ['@vedoro', '@creator', '@iraq_video', '@daily_story'];
+  final _search = TextEditingController();
+  Future<List<Map<String, dynamic>>>? _results;
+
   @override
-  Widget build(BuildContext context) {
-    final results = creators.where((name) => name.toLowerCase().contains(query.toLowerCase())).toList();
-    return SafeArea(child: Padding(
-      padding: const EdgeInsets.all(18),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('اكتشف', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 16),
-        TextField(onChanged: (v) => setState(() => query = v), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'ابحث عن حساب...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none))),
-        const SizedBox(height: 18),
-        const Text('حسابات مقترحة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-        Expanded(child: ListView(children: results.map((name) => ListTile(leading: const CircleAvatar(backgroundColor: accent, child: Icon(Icons.person, color: Colors.white)), title: Text(name), subtitle: const Text('صانع محتوى على VEDORO'), trailing: const Icon(Icons.chevron_right))).toList())),
-      ]),
-    ));
+  void initState() {
+    super.initState();
+    _results = _searchUsers('');
   }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<List<Map<String, dynamic>>> _searchUsers(String value) async {
+    final client = Supabase.instance.client;
+    final currentId = client.auth.currentUser?.id;
+    var request = client.from('profiles').select('id, username');
+    if (value.trim().isNotEmpty) {
+      request = request.ilike('username', '%${value.trim()}%');
+    }
+    final rows = await request.limit(30);
+    return List<Map<String, dynamic>>.from(rows)
+      .where((row) => row['id'] != currentId).toList();
+  }
+
+  void _onSearch(String value) {
+    setState(() => _results = _searchUsers(value));
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(child: Padding(
+    padding: const EdgeInsets.all(18),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('اكتشف', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 16),
+      TextField(
+        controller: _search,
+        onChanged: _onSearch,
+        decoration: InputDecoration(
+          prefixIcon: const Icon(Icons.search),
+          hintText: 'ابحث عن اسم المستخدم...',
+          suffixIcon: IconButton(icon: const Icon(Icons.close), onPressed: () {
+            _search.clear();
+            _onSearch('');
+          }),
+          filled: true, fillColor: Colors.white10,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+        ),
+      ),
+      const SizedBox(height: 18),
+      const Text('مستخدمو VEDORO', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 8),
+      Expanded(child: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _results,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: accent));
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text('تعذر البحث: ${snapshot.error}', textAlign: TextAlign.center));
+          }
+          final users = snapshot.data ?? [];
+          if (users.isEmpty) {
+            return const Center(child: Text('ما لقينا حسابات مطابقة. جرّب اسم ثاني.', style: TextStyle(color: Colors.white54)));
+          }
+          return ListView.separated(
+            itemCount: users.length,
+            separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+            itemBuilder: (context, index) {
+              final item = users[index];
+              final username = (item['username'] ?? 'user').toString();
+              return ListTile(
+                leading: const CircleAvatar(backgroundColor: accent, child: Icon(Icons.person, color: Colors.white)),
+                title: Text('@$username', style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: const Text('عضو في VEDORO'),
+                trailing: const Icon(Icons.verified_user_outlined, color: Colors.white38),
+              );
+            },
+          );
+        },
+      )),
+    ]),
+  ));
 }
 
 class MessagesPage extends StatelessWidget {
@@ -792,8 +860,37 @@ class MessagesPage extends StatelessWidget {
   ]));
 }
 
-class ProfilePage extends StatelessWidget {
+class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  late Future<Map<String, int>> _stats;
+
+  @override
+  void initState() {
+    super.initState();
+    _stats = _loadStats();
+  }
+
+  Future<Map<String, int>> _loadStats() async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) return {'videos': 0, 'followers': 0, 'following': 0};
+    final results = await Future.wait([
+      client.from('posts').select('id').eq('author_id', user.id).eq('moderation_status', 'approved'),
+      client.from('follows').select('follower_id').eq('followed_id', user.id),
+      client.from('follows').select('followed_id').eq('follower_id', user.id),
+    ]);
+    return {
+      'videos': (results[0] as List).length,
+      'followers': (results[1] as List).length,
+      'following': (results[2] as List).length,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
@@ -809,11 +906,17 @@ class ProfilePage extends StatelessWidget {
       if (user?.email != null)
         Text(user!.email!, style: const TextStyle(color: Colors.white38, fontSize: 12)),
       const SizedBox(height: 24),
-      const Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-        _ProfileStat(value: '0', label: 'فيديو'),
-        _ProfileStat(value: '0', label: 'متابعون'),
-        _ProfileStat(value: '0', label: 'يتابع'),
-      ]),
+      FutureBuilder<Map<String, int>>(
+        future: _stats,
+        builder: (context, snapshot) {
+          final stats = snapshot.data ?? {'videos': 0, 'followers': 0, 'following': 0};
+          return Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            _ProfileStat(value: '${stats['videos']}', label: 'فيديو'),
+            _ProfileStat(value: '${stats['followers']}', label: 'متابعون'),
+            _ProfileStat(value: '${stats['following']}', label: 'يتابع'),
+          ]);
+        },
+      ),
       const Divider(height: 34, color: Colors.white12),
       FutureBuilder<bool>(
         future: Supabase.instance.client.from('app_admins').select('user_id')
@@ -830,7 +933,7 @@ class ProfilePage extends StatelessWidget {
             )
           : const SizedBox.shrink(),
       ),
-      const Expanded(child: Center(child: Text('ملفك الشخصي على VEDORO. ستظهر فيديوهاتك وإحصاءاتك هنا.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)))),
+      const Expanded(child: Center(child: Text('إحصائيات حسابك تتحدث من قاعدة البيانات مباشرة.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)))),
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
         child: OutlinedButton.icon(
