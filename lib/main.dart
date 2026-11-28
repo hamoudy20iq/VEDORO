@@ -318,8 +318,20 @@ class _FeedScreenState extends State<FeedScreen> {
         .limit(40);
     if (rows.isEmpty) return [];
 
-    final postIds = rows.map((row) => row['id'] as String).toList();
-    final authorIds = rows.map((row) => row['author_id'] as String).toSet().toList();
+    final blockRows = await client.from('user_blocks')
+        .select('blocker_id, blocked_id')
+        .or('blocker_id.eq.${user.id},blocked_id.eq.${user.id}');
+    final blockedIds = <String>{};
+    for (final block in blockRows) {
+      final blocker = block['blocker_id'].toString();
+      final blocked = block['blocked_id'].toString();
+      blockedIds.add(blocker == user.id ? blocked : blocker);
+    }
+    final visibleRows = rows.where((row) => !blockedIds.contains(row['author_id'].toString())).toList();
+    if (visibleRows.isEmpty) return [];
+
+    final postIds = visibleRows.map((row) => row['id'] as String).toList();
+    final authorIds = visibleRows.map((row) => row['author_id'] as String).toSet().toList();
     final profileRows = await client.from('profiles')
         .select('id, username')
         .inFilter('id', authorIds);
@@ -349,7 +361,7 @@ class _FeedScreenState extends State<FeedScreen> {
     }
 
     final result = <DemoVideo>[];
-    for (final row in rows) {
+    for (final row in visibleRows) {
       final path = row['media_path'] as String?;
       if (path == null || path.isEmpty) continue;
       final postId = row['id'] as String;
@@ -1277,9 +1289,20 @@ class _ExplorePageState extends State<ExplorePage> {
     if (value.trim().isNotEmpty) {
       request = request.ilike('username', '%${value.trim()}%');
     }
-    final rows = await request.limit(30);
+    final rows = await request.limit(50);
+    if (currentId == null) return [];
+    final blockRows = await client.from('user_blocks')
+        .select('blocker_id, blocked_id')
+        .or('blocker_id.eq.$currentId,blocked_id.eq.$currentId');
+    final blockedIds = <String>{};
+    for (final block in blockRows) {
+      final blocker = block['blocker_id'].toString();
+      final blocked = block['blocked_id'].toString();
+      blockedIds.add(blocker == currentId ? blocked : blocker);
+    }
     return List<Map<String, dynamic>>.from(rows)
-      .where((row) => row['id'] != currentId).toList();
+      .where((row) => row['id'] != currentId && !blockedIds.contains(row['id'].toString()))
+      .take(30).toList();
   }
 
   void _onSearch(String value) {
