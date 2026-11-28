@@ -2840,11 +2840,69 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 }
 
-class SettingsPage extends StatelessWidget {
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.onEditProfile});
   final VoidCallback onEditProfile;
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
 
-  void _openInfo(BuildContext context, String title, String message) {
+class _SettingsPageState extends State<SettingsPage> {
+  bool _loading = true;
+  bool _saving = false;
+  bool _isPrivate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrivacy();
+  }
+
+  Future<void> _loadPrivacy() async {
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) return;
+      final row = await Supabase.instance.client.from('profiles')
+          .select('is_private').eq('id', uid).maybeSingle();
+      if (mounted) setState(() => _isPrivate = row?['is_private'] == true);
+    } catch (_) {
+      if (mounted) _showMessage('تعذر تحميل إعداد الخصوصية');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _setPrivate(bool value) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) throw Exception('انتهت جلسة الحساب');
+      await Supabase.instance.client.from('profiles').update({
+        'is_private': value,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', uid);
+      if (mounted) {
+        setState(() => _isPrivate = value);
+        _showMessage(value
+          ? 'تم حفظ اختيار الحساب الخاص'
+          : 'تم حفظ اختيار الحساب العام');
+      }
+    } catch (e) {
+      if (mounted) _showMessage('تعذر حفظ الإعداد: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _openInfo(String title, String message) {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2854,20 +2912,6 @@ class SettingsPage extends StatelessWidget {
         actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
       ),
     );
-  }
-
-  Future<void> _sendPasswordReset(BuildContext context) async {
-    final email = Supabase.instance.client.auth.currentUser?.email;
-    if (email == null || email.isEmpty) {
-      _openInfo(context, 'تعذر إرسال الرابط', 'لا يوجد بريد إلكتروني مرتبط بهذا الحساب.');
-      return;
-    }
-    try {
-      await Supabase.instance.client.auth.resetPasswordForEmail(email);
-      if (context.mounted) _openInfo(context, 'تحقق من بريدك', 'أرسلنا رابط تغيير كلمة المرور إلى $email');
-    } catch (e) {
-      if (context.mounted) _openInfo(context, 'لم يتم الإرسال', 'حدث خطأ أثناء إرسال رابط تغيير كلمة المرور. حاول مرة أخرى لاحقاً.');
-    }
   }
 
   Widget _sectionTitle(String title) => Padding(
@@ -2909,36 +2953,72 @@ class SettingsPage extends StatelessWidget {
           _settingTile(
             icon: Icons.person_outline_rounded, title: 'معلومات الحساب',
             subtitle: user?.email ?? 'إدارة بيانات ملفك الشخصي',
-            onTap: onEditProfile,
+            onTap: widget.onEditProfile,
           ),
           _settingTile(
             icon: Icons.lock_outline_rounded, title: 'كلمة المرور والأمان',
             subtitle: 'إرسال رابط آمن لتغيير كلمة المرور',
-            onTap: () => _sendPasswordReset(context),
+            onTap: () async {
+              final email = Supabase.instance.client.auth.currentUser?.email;
+              if (email == null || email.isEmpty) {
+                _openInfo('تعذر إرسال الرابط', 'لا يوجد بريد إلكتروني مرتبط بهذا الحساب.');
+                return;
+              }
+              try {
+                await Supabase.instance.client.auth.resetPasswordForEmail(email);
+                if (mounted) _openInfo('تحقق من بريدك', 'أرسلنا رابط تغيير كلمة المرور إلى $email');
+              } catch (_) {
+                if (mounted) _openInfo('لم يتم الإرسال', 'تعذر إرسال رابط تغيير كلمة المرور. حاول لاحقاً.');
+              }
+            },
           ),
           _sectionTitle('الخصوصية والتفاعل'),
+          SwitchListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 18),
+            secondary: Container(
+              width: 42, height: 42,
+              decoration: BoxDecoration(color: accent.withValues(alpha: .13), borderRadius: BorderRadius.circular(14)),
+              child: const Icon(Icons.lock_person_outlined, color: accent),
+            ),
+            title: const Text('حساب خاص', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            subtitle: Text(
+              _loading ? 'جارٍ تحميل الإعداد...' : (_isPrivate
+                ? 'الحساب مضبوط حالياً كخاص'
+                : 'الحساب مضبوط حالياً كعام'),
+              style: const TextStyle(color: Colors.white54, fontSize: 11),
+            ),
+            value: _isPrivate,
+            onChanged: _loading || _saving ? null : _setPrivate,
+            activeColor: accent,
+          ),
           _settingTile(
             icon: Icons.block_rounded, title: 'الحسابات المحظورة',
             subtitle: 'عرض الحسابات التي حظرتها وإلغاء الحظر',
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BlockedAccountsPage())),
           ),
           _settingTile(
-            icon: Icons.visibility_outlined, title: 'خصوصية المحتوى',
-            subtitle: 'من يمكنه مشاهدة منشوراتك على VEDORO',
-            onTap: () => _openInfo(context, 'خصوصية المحتوى',
-              'المنشورات العامة المعتمدة تظهر في صفحة اكتشف وخلاصة الفيديو. إعدادات الجمهور المخصصة ستتوفر لاحقاً بعد ربطها بنظام صلاحيات النشر.'),
+            icon: Icons.comment_outlined, title: 'التعليقات والإشارات',
+            subtitle: 'إعدادات التحكم بالتعليقات والإشارات قيد الربط',
+            onTap: () => _openInfo('التعليقات والإشارات',
+              'هذا القسم ظاهر ضمن إعدادات VEDORO، وسيتم تفعيل التحكم بمن يستطيع التعليق أو الإشارة بعد ربط قواعده مع نظام المنشورات.'),
+          ),
+          _settingTile(
+            icon: Icons.mail_outline_rounded, title: 'من يمكنه مراسلتك',
+            subtitle: 'خيارات الرسائل قيد الربط',
+            onTap: () => _openInfo('الرسائل',
+              'سيتم إضافة خيارات استقبال الرسائل من الجميع أو من الحسابات التي تتابعها بعد ربطها بصلاحيات المحادثات.'),
           ),
           _settingTile(
             icon: Icons.notifications_none_rounded, title: 'الإشعارات',
-            subtitle: 'إدارة تنبيهات النشاط والرسائل',
-            onTap: () => _openInfo(context, 'الإشعارات',
-              'يمكنك مشاهدة تنبيهات الإعجابات والتعليقات والمتابعات والرسائل من تبويب الإشعارات. مفاتيح التحكم التفصيلية بالتنبيهات قيد الإضافة.'),
+            subtitle: 'عرض تنبيهات النشاط والرسائل',
+            onTap: () => _openInfo('الإشعارات',
+              'تابع تنبيهات الإعجابات والتعليقات والمتابعات والرسائل من تبويب الإشعارات.'),
           ),
           _sectionTitle('حول التطبيق'),
           _settingTile(
             icon: Icons.info_outline_rounded, title: 'حول VEDORO',
             subtitle: 'منصتك الاجتماعية للفيديوهات والقصص والرسائل',
-            onTap: () => _openInfo(context, 'VEDORO', 'VEDORO — مجتمع يجمع الفيديوهات القصيرة والقصص والرسائل في تجربة واحدة.'),
+            onTap: () => _openInfo('VEDORO', 'مجتمع يجمع الفيديوهات القصيرة والقصص والرسائل في تجربة واحدة.'),
           ),
           const SizedBox(height: 18),
           Padding(
