@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_gate.dart';
 
@@ -41,7 +42,7 @@ class DemoVideo {
     required this.url, required this.user, required this.caption,
     required this.music, required this.likes, this.status = 'approved',
     this.postId, this.authorId, this.likeCount = 0, this.commentCount = 0,
-    this.isLiked = false, this.isFollowing = false,
+    this.isLiked = false, this.isFollowing = false, this.thumbnailUrl,
   });
   final String url;
   final String user;
@@ -55,6 +56,7 @@ class DemoVideo {
   final int commentCount;
   final bool isLiked;
   final bool isFollowing;
+  final String? thumbnailUrl;
 }
 
 const demoVideos = [
@@ -206,8 +208,26 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
     };
     final path = '${user.id}/${DateTime.now().microsecondsSinceEpoch}.$extension';
     var uploaded = false;
+    var thumbnailUploaded = false;
+    String? thumbnailPath;
 
     try {
+      final generatedThumbnail = await VideoThumbnail.thumbnailFile(
+        video: selected.path,
+        thumbnailPath: Directory.systemTemp.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 480,
+        quality: 65,
+      );
+      if (generatedThumbnail != null) {
+        thumbnailPath = '${user.id}/${DateTime.now().microsecondsSinceEpoch}_thumb.jpg';
+        await Supabase.instance.client.storage.from('vedoro-thumbnails').upload(
+          thumbnailPath!,
+          File(generatedThumbnail),
+          fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: false),
+        );
+        thumbnailUploaded = true;
+      }
       await storage.upload(
         path,
         File(selected.path),
@@ -220,6 +240,7 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
         'post_type': 'video',
         'caption': _caption.text.trim(),
         'media_path': path,
+        if (thumbnailPath != null) 'thumbnail_path': thumbnailPath,
         'visibility': 'public',
         'moderation_status': 'approved',
       });
@@ -229,9 +250,10 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
       widget.onUploaded();
     } catch (e) {
       if (uploaded) {
-        try {
-          await storage.remove([path]);
-        } catch (_) {}
+        try { await storage.remove([path]); } catch (_) {}
+      }
+      if (thumbnailUploaded && thumbnailPath != null) {
+        try { await Supabase.instance.client.storage.from('vedoro-thumbnails').remove([thumbnailPath]); } catch (_) {}
       }
       _showError('فشل رفع الفيديو: $e');
     } finally {
@@ -312,7 +334,7 @@ class _FeedScreenState extends State<FeedScreen> {
     final user = client.auth.currentUser;
     if (user == null) return [];
     final rows = await client.from('posts')
-        .select('id, author_id, caption, media_path, moderation_status, created_at')
+        .select('id, author_id, caption, media_path, thumbnail_path, moderation_status, created_at')
         .eq('visibility', 'public')
         .or('moderation_status.eq.approved,author_id.eq.${user.id}')
         .order('created_at', ascending: false)
@@ -388,10 +410,16 @@ class _FeedScreenState extends State<FeedScreen> {
       final authorId = row['author_id'] as String;
       try {
         final url = await client.storage.from('vedoro-videos').createSignedUrl(path, 3600);
+        String? thumbnailUrl;
+        final thumbPath = row['thumbnail_path']?.toString();
+        if (thumbPath != null && thumbPath.isNotEmpty) {
+          try { thumbnailUrl = await client.storage.from('vedoro-thumbnails').createSignedUrl(thumbPath, 3600); } catch (_) {}
+        }
         result.add(DemoVideo(
           postId: postId,
           authorId: authorId,
           url: url,
+          thumbnailUrl: thumbnailUrl,
           user: names[authorId] ?? '@vedoro',
           caption: (row['caption'] ?? '').toString(),
           music: 'الصوت الأصلي',
@@ -896,9 +924,14 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
           color: const Color(0xFF171323),
           child: ready
             ? FittedBox(fit: BoxFit.cover, child: SizedBox(width: controller!.value.size.width, height: controller!.value.size.height, child: VideoPlayer(controller!)))
-            : Center(child: failed
-              ? const Icon(Icons.play_circle_outline, size: 76, color: Colors.white54)
-              : const CircularProgressIndicator(color: accent)),
+            : (widget.video.thumbnailUrl != null
+              ? Image.network(widget.video.thumbnailUrl!, fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Center(child: failed
+                    ? const Icon(Icons.play_circle_outline, size: 76, color: Colors.white54)
+                    : const CircularProgressIndicator(color: accent)))
+              : Center(child: failed
+                  ? const Icon(Icons.play_circle_outline, size: 76, color: Colors.white54)
+                  : const CircularProgressIndicator(color: accent))),
         ),
         const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black54, Colors.transparent, Colors.transparent, Colors.black87], stops: [0, .2, .55, 1]))),
         if (showControls && ready && !controller!.value.isPlaying)
