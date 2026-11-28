@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_gate.dart';
@@ -76,21 +78,17 @@ class _MainScreenState extends State<MainScreen> {
   void _showCreateNotice() {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF191922),
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.video_call_rounded, size: 48, color: accent),
-            const SizedBox(height: 12),
-            const Text('انشر فيديوك على VEDORO', style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            const Text('ميزة اختيار الفيديو ورفعه من الهاتف قيد التطوير بالمرحلة القادمة.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white60)),
-            const SizedBox(height: 16),
-            FilledButton(onPressed: () => Navigator.pop(context), child: const Text('تمام')),
-          ]),
-        ),
+      builder: (sheetContext) => CreateVideoSheet(
+        onUploaded: () {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('تم رفع الفيديو وإرساله للمراجعة بنجاح 💜')),
+            );
+          }
+        },
       ),
     );
   }
@@ -119,6 +117,156 @@ class _MainScreenState extends State<MainScreen> {
           NavigationDestination(icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'الرسائل'),
           NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'حسابي'),
         ],
+      ),
+    );
+  }
+}
+
+class CreateVideoSheet extends StatefulWidget {
+  const CreateVideoSheet({super.key, required this.onUploaded});
+  final VoidCallback onUploaded;
+
+  @override
+  State<CreateVideoSheet> createState() => _CreateVideoSheetState();
+}
+
+class _CreateVideoSheetState extends State<CreateVideoSheet> {
+  final _picker = ImagePicker();
+  final _caption = TextEditingController();
+  XFile? _video;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _caption.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickVideo() async {
+    try {
+      final picked = await _picker.pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(minutes: 5),
+      );
+      if (picked == null || !mounted) return;
+      final file = File(picked.path);
+      final size = await file.length();
+      if (size > 100 * 1024 * 1024) {
+        _showError('حجم الفيديو أكبر من 100 ميغابايت.');
+        return;
+      }
+      final extension = picked.path.split('.').last.toLowerCase();
+      if (!['mp4', 'mov', 'webm'].contains(extension)) {
+        _showError('صيغة الفيديو غير مدعومة. استخدم MP4 أو MOV أو WEBM.');
+        return;
+      }
+      setState(() => _video = picked);
+    } catch (e) {
+      _showError('تعذر اختيار الفيديو: $e');
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red.shade700),
+    );
+  }
+
+  Future<void> _upload() async {
+    final selected = _video;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (selected == null || user == null || _busy) return;
+
+    setState(() => _busy = true);
+    final storage = Supabase.instance.client.storage.from('vedoro-videos');
+    final extension = selected.path.split('.').last.toLowerCase();
+    final mimeType = switch (extension) {
+      'mov' => 'video/quicktime',
+      'webm' => 'video/webm',
+      _ => 'video/mp4',
+    };
+    final path = '${user.id}/${DateTime.now().microsecondsSinceEpoch}.$extension';
+    var uploaded = false;
+
+    try {
+      await storage.upload(
+        path,
+        File(selected.path),
+        fileOptions: FileOptions(contentType: mimeType, upsert: false),
+      );
+      uploaded = true;
+
+      await Supabase.instance.client.from('posts').insert({
+        'author_id': user.id,
+        'post_type': 'video',
+        'caption': _caption.text.trim(),
+        'media_path': path,
+        'visibility': 'public',
+        'moderation_status': 'pending',
+      });
+
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onUploaded();
+    } catch (e) {
+      if (uploaded) {
+        try {
+          await storage.remove([path]);
+        } catch (_) {}
+      }
+      _showError('فشل رفع الفيديو: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(20, 12, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(Icons.video_call_rounded, size: 46, color: accent),
+            const SizedBox(height: 10),
+            const Text('انشر فيديوك على VEDORO',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 18),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _pickVideo,
+              icon: const Icon(Icons.video_library_outlined),
+              label: Text(_video == null ? 'اختيار فيديو من الهاتف' : 'تم اختيار: ${_video!.name}'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _caption,
+              maxLength: 500,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText: 'اكتب وصف الفيديو...',
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text('سيُرفع الفيديو إلى التخزين الخاص ويُرسل للمراجعة قبل ظهوره للآخرين.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 14),
+            FilledButton(
+              onPressed: _video == null || _busy ? null : _upload,
+              style: FilledButton.styleFrom(backgroundColor: accent, padding: const EdgeInsets.symmetric(vertical: 15)),
+              child: _busy
+                ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Text('رفع الفيديو'),
+            ),
+          ],
+        ),
       ),
     );
   }
