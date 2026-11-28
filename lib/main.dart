@@ -36,12 +36,13 @@ class VedoroApp extends StatelessWidget {
 }
 
 class DemoVideo {
-  const DemoVideo({required this.url, required this.user, required this.caption, required this.music, required this.likes});
+  const DemoVideo({required this.url, required this.user, required this.caption, required this.music, required this.likes, this.status = 'approved'});
   final String url;
   final String user;
   final String caption;
   final String music;
   final String likes;
+  final String status;
 }
 
 const demoVideos = [
@@ -66,6 +67,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int tab = 0;
   int activeVideo = 0;
+  int feedRefresh = 0;
 
   void openTab(int index) {
     if (index == 2) {
@@ -84,8 +86,12 @@ class _MainScreenState extends State<MainScreen> {
       builder: (sheetContext) => CreateVideoSheet(
         onUploaded: () {
           if (mounted) {
+            setState(() {
+              feedRefresh++;
+              tab = 0;
+            });
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('تم رفع الفيديو وإرساله للمراجعة بنجاح 💜')),
+              const SnackBar(content: Text('تم رفع الفيديو. سيظهر عندك بحالة قيد المراجعة 💜')),
             );
           }
         },
@@ -96,7 +102,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      FeedScreen(onPageChanged: (i) => activeVideo = i),
+      FeedScreen(key: ValueKey(feedRefresh), onPageChanged: (i) => activeVideo = i),
       const ExplorePage(),
       const SizedBox.shrink(),
       const MessagesPage(),
@@ -281,30 +287,107 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> {
   int current = 0;
+  late Future<List<DemoVideo>> _videos;
+
   @override
-  Widget build(BuildContext context) => Stack(children: [
-    PageView.builder(
-      scrollDirection: Axis.vertical,
-      itemCount: demoVideos.length,
-      onPageChanged: (index) {
-        setState(() => current = index);
-        widget.onPageChanged(index);
-      },
-      itemBuilder: (context, index) => VideoFeedItem(
-        key: ValueKey(index), video: demoVideos[index], active: current == index,
-      ),
-    ),
-    SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text('لك', style: TextStyle(color: Colors.white.withValues(alpha: .72), fontSize: 16)),
-          const SizedBox(width: 22),
-          const Text('متابَعون', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-        ]),
-      ),
-    ),
-  ]);
+  void initState() {
+    super.initState();
+    _videos = _loadVideos();
+  }
+
+  Future<List<DemoVideo>> _loadVideos() async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) return [];
+    final rows = await client.from('posts')
+        .select('id, author_id, caption, media_path, moderation_status')
+        .eq('visibility', 'public')
+        .or('moderation_status.eq.approved,author_id.eq.${user.id}')
+        .order('created_at', ascending: false)
+        .limit(40);
+    if (rows.isEmpty) return [];
+
+    final authorIds = rows.map((row) => row['author_id'] as String).toSet().toList();
+    final profileRows = await client.from('profiles')
+        .select('id, username')
+        .inFilter('id', authorIds);
+    final names = <String, String>{
+      for (final profile in profileRows)
+        profile['id'] as String: '@${profile['username'] ?? 'user'}',
+    };
+
+    final result = <DemoVideo>[];
+    for (final row in rows) {
+      final path = row['media_path'] as String?;
+      if (path == null || path.isEmpty) continue;
+      try {
+        final url = await client.storage.from('vedoro-videos').createSignedUrl(path, 3600);
+        result.add(DemoVideo(
+          url: url,
+          user: names[row['author_id']] ?? '@vedoro',
+          caption: (row['caption'] ?? '').toString(),
+          music: 'الصوت الأصلي',
+          likes: '0',
+          status: (row['moderation_status'] ?? 'pending').toString(),
+        ));
+      } catch (_) {
+        // Skip media that the current user is not allowed to read.
+      }
+    }
+    return result;
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<DemoVideo>>(
+    future: _videos,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        return const Center(child: CircularProgressIndicator(color: accent));
+      }
+      if (snapshot.hasError) {
+        return Center(child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text('تعذر تحميل الفيديوهات: ${snapshot.error}', textAlign: TextAlign.center),
+        ));
+      }
+      final videos = snapshot.data ?? [];
+      if (videos.isEmpty) {
+        return const Center(child: Padding(
+          padding: EdgeInsets.all(28),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.video_library_outlined, size: 66, color: accent),
+            SizedBox(height: 14),
+            Text('ماكو فيديوهات منشورة بعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            Text('انشر أول فيديو إلك، وبعد الموافقة راح يظهر هنا للجميع.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white60)),
+          ]),
+        ));
+      }
+      return Stack(children: [
+        PageView.builder(
+          scrollDirection: Axis.vertical,
+          itemCount: videos.length,
+          onPageChanged: (index) {
+            setState(() => current = index);
+            widget.onPageChanged(index);
+          },
+          itemBuilder: (context, index) => VideoFeedItem(
+            key: ValueKey(videos[index].url), video: videos[index], active: current == index,
+          ),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Text('لك', style: TextStyle(color: Colors.white.withValues(alpha: .72), fontSize: 16)),
+              const SizedBox(width: 22),
+              const Text('متابَعون', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            ]),
+          ),
+        ),
+      ]);
+    },
+  );
 }
 
 class VideoFeedItem extends StatefulWidget {
@@ -440,6 +523,15 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
             _ActionButton(icon: muted ? Icons.volume_off : Icons.music_note, label: muted ? 'صامت' : 'الصوت', onTap: () async { setState(() => muted = !muted); if (controller?.value.isInitialized == true) await controller!.setVolume(muted ? 0 : 1); }),
           ]),
         ),
+        if (widget.video.status == 'pending')
+          Positioned(
+            top: 76, left: 16,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(color: Colors.orange.shade800, borderRadius: BorderRadius.circular(18)),
+              child: const Text('قيد المراجعة - ظاهر لك فقط', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+            ),
+          ),
         Positioned(
           left: 16, right: 86, bottom: 28,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
