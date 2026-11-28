@@ -1136,7 +1136,6 @@ class _ProfilePageState extends State<ProfilePage> {
         file,
         fileOptions: FileOptions(contentType: mime, upsert: false),
       );
-      final oldPath = (_profile is Future ? null : null);
       await Supabase.instance.client.from('profiles').update({
         'avatar_path': path,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
