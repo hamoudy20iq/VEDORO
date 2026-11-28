@@ -2329,6 +2329,12 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
             const SizedBox(height: 6),
             OutlinedButton.icon(
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatorAnalyticsPage())),
+              icon: const Icon(Icons.insights_outlined, size: 18),
+              label: const Text('إحصائيات صانع المحتوى'),
+            ),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
               onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BlockedAccountsPage())),
               icon: const Icon(Icons.block, size: 18),
               label: const Text('الحسابات المحظورة'),
@@ -2641,6 +2647,122 @@ class _ProfilePostList extends StatelessWidget {
         ),
       );
     },
+  );
+}
+
+class CreatorAnalyticsPage extends StatefulWidget {
+  const CreatorAnalyticsPage({super.key});
+  @override
+  State<CreatorAnalyticsPage> createState() => _CreatorAnalyticsPageState();
+}
+
+class _CreatorAnalyticsPageState extends State<CreatorAnalyticsPage> {
+  late Future<List<Map<String, dynamic>>> _analytics;
+  @override
+  void initState() {
+    super.initState();
+    _analytics = _load();
+  }
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser!.id;
+    final posts = await client.from('posts')
+        .select('id,caption,created_at')
+        .eq('author_id', uid)
+        .order('created_at', ascending: false)
+        .limit(50);
+    final result = <Map<String, dynamic>>[];
+    for (final post in posts) {
+      final raw = await client.rpc('get_creator_post_analytics', params: {
+        'p_post_id': post['id'],
+      });
+      final rows = List<Map<String, dynamic>>.from(raw);
+      final stats = rows.isEmpty ? <String, dynamic>{} : rows.first;
+      result.add({
+        ...Map<String, dynamic>.from(post),
+        'view_count': stats['view_count'] ?? 0,
+        'total_watch_ms': stats['total_watch_ms'] ?? 0,
+        'average_watch_ms': stats['average_watch_ms'] ?? 0,
+        'completion_count': stats['completion_count'] ?? 0,
+      });
+    }
+    return result;
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('إحصائيات صانع المحتوى'),
+      actions: [IconButton(onPressed: () => setState(() => _analytics = _load()), icon: const Icon(Icons.refresh))],
+    ),
+    body: FutureBuilder<List<Map<String, dynamic>>>(
+      future: _analytics,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: accent));
+        }
+        if (snapshot.hasError) {
+          return Center(child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text('تعذر تحميل الإحصائيات: ${snapshot.error}', textAlign: TextAlign.center),
+          ));
+        }
+        final posts = snapshot.data ?? [];
+        final views = posts.fold<int>(0, (sum, p) => sum + ((p['view_count'] as num?)?.toInt() ?? 0));
+        final watched = posts.fold<int>(0, (sum, p) => sum + ((p['total_watch_ms'] as num?)?.toInt() ?? 0));
+        final completed = posts.fold<int>(0, (sum, p) => sum + ((p['completion_count'] as num?)?.toInt() ?? 0));
+        return ListView(padding: const EdgeInsets.all(16), children: [
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            childAspectRatio: 1.7,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            children: [
+              _AnalyticsTile(label: 'المشاهدات المسجلة', value: views.toString(), icon: Icons.visibility_outlined),
+              _AnalyticsTile(label: 'وقت المشاهدة', value: '${(watched / 60000).toStringAsFixed(1)} دقيقة', icon: Icons.timer_outlined),
+              _AnalyticsTile(label: 'مشاهدات مكتملة', value: completed.toString(), icon: Icons.check_circle_outline),
+              _AnalyticsTile(label: 'عدد الفيديوهات', value: posts.length.toString(), icon: Icons.video_library_outlined),
+            ],
+          ),
+          const SizedBox(height: 20),
+          const Text('أداء الفيديوهات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          if (posts.isEmpty) const Padding(
+            padding: EdgeInsets.all(24),
+            child: Text('انشر فيديوهاتك حتى تظهر إحصائياتها هنا.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white60)),
+          ),
+          ...posts.map((post) => Card(
+            color: const Color(0xFF171720),
+            child: ListTile(
+              title: Text((post['caption'] ?? 'فيديو بدون وصف').toString(), maxLines: 2, overflow: TextOverflow.ellipsis),
+              subtitle: Text('المشاهدات: ${post['view_count']}  •  المكتملة: ${post['completion_count']}'),
+              trailing: Text('${((post['total_watch_ms'] as num).toDouble() / 60000).toStringAsFixed(1)} د', style: const TextStyle(color: accent)),
+            ),
+          )),
+        ]);
+      },
+    ),
+  );
+}
+
+class _AnalyticsTile extends StatelessWidget {
+  const _AnalyticsTile({required this.label, required this.value, required this.icon});
+  final String label;
+  final String value;
+  final IconData icon;
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(color: const Color(0xFF171720), borderRadius: BorderRadius.circular(14)),
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Icon(icon, color: accent),
+      const SizedBox(height: 6),
+      Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+      Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: Colors.white60)),
+    ]),
   );
 }
 
