@@ -3603,6 +3603,8 @@ class _CreatorAnalyticsPageState extends State<CreatorAnalyticsPage> {
         final views = posts.fold<int>(0, (sum, p) => sum + ((p['view_count'] as num?)?.toInt() ?? 0));
         final watched = posts.fold<int>(0, (sum, p) => sum + ((p['total_watch_ms'] as num?)?.toInt() ?? 0));
         final completed = posts.fold<int>(0, (sum, p) => sum + ((p['completion_count'] as num?)?.toInt() ?? 0));
+        final averageWatchMs = views == 0 ? 0 : watched ~/ views;
+        final completionRate = views == 0 ? 0.0 : completed * 100 / views;
         return ListView(padding: const EdgeInsets.all(16), children: [
           GridView.count(
             shrinkWrap: true,
@@ -3615,6 +3617,8 @@ class _CreatorAnalyticsPageState extends State<CreatorAnalyticsPage> {
               _AnalyticsTile(label: 'المشاهدات المسجلة', value: views.toString(), icon: Icons.visibility_outlined),
               _AnalyticsTile(label: 'وقت المشاهدة', value: '${(watched / 60000).toStringAsFixed(1)} دقيقة', icon: Icons.timer_outlined),
               _AnalyticsTile(label: 'مشاهدات مكتملة', value: completed.toString(), icon: Icons.check_circle_outline),
+              _AnalyticsTile(label: 'متوسط المشاهدة', value: '${(averageWatchMs / 1000).toStringAsFixed(1)} ث', icon: Icons.timelapse_rounded),
+              _AnalyticsTile(label: 'نسبة الإكمال', value: '${completionRate.toStringAsFixed(1)}%', icon: Icons.donut_large_rounded),
               _AnalyticsTile(label: 'عدد الفيديوهات', value: posts.length.toString(), icon: Icons.video_library_outlined),
             ],
           ),
