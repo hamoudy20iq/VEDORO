@@ -43,8 +43,8 @@ class DownloadItem {
     this.error,
   });
 
-  final String name;
-  final String path;
+  String name;
+  String path;
   double progress;
   bool done;
   String? error;
