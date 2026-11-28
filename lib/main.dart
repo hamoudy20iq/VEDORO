@@ -487,30 +487,41 @@ class _FeedScreenState extends State<FeedScreen> {
           ]),
         ));
       }
-      return Stack(children: [
-        PageView.builder(
-          scrollDirection: Axis.vertical,
-          allowImplicitScrolling: true,
-          itemCount: videos.length,
-          onPageChanged: (index) {
-            setState(() => current = index);
-            widget.onPageChanged(index);
-          },
-          itemBuilder: (context, index) => RepaintBoundary(child: VideoFeedItem(
-            key: ValueKey(videos[index].url), video: videos[index], active: current == index,
-          )),
-        ),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Text('لك', style: TextStyle(color: Colors.white.withValues(alpha: .72), fontSize: 16)),
-              const SizedBox(width: 22),
-              const Text('متابَعون', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            ]),
+      return RefreshIndicator(
+        color: accent,
+        backgroundColor: const Color(0xFF171720),
+        displacement: 72,
+        onRefresh: () async {
+          final fresh = _loadVideos();
+          setState(() => _videos = fresh);
+          await fresh;
+        },
+        child: Stack(children: [
+          PageView.builder(
+            scrollDirection: Axis.vertical,
+            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+            allowImplicitScrolling: true,
+            itemCount: videos.length,
+            onPageChanged: (index) {
+              setState(() => current = index);
+              widget.onPageChanged(index);
+            },
+            itemBuilder: (context, index) => RepaintBoundary(child: VideoFeedItem(
+              key: ValueKey(videos[index].url), video: videos[index], active: current == index,
+            )),
           ),
-        ),
-      ]);
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Text('لك', style: TextStyle(color: Colors.white.withValues(alpha: .72), fontSize: 16)),
+                const SizedBox(width: 22),
+                const Text('متابَعون', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+              ]),
+            ),
+          ),
+        ]),
+      );
     },
   );
 }
@@ -2620,136 +2631,149 @@ class _ProfilePageState extends State<ProfilePage> {
     };
   }
 
+  Future<void> _refreshProfile() async {
+    setState(() {
+      _profile = _loadProfile();
+      _stats = _loadStats();
+    });
+    await Future.wait([_profile, _stats]);
+  }
+
+  Widget _profileAction(IconData icon, String label, VoidCallback onTap) {
+    return Tooltip(
+      message: label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, color: accent, size: 22),
+            const SizedBox(height: 4),
+            Text(label, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+          ]),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
-    return SafeArea(child: Column(children: [
-      const SizedBox(height: 24),
-      FutureBuilder<Map<String, dynamic>>(
-        future: _profile,
-        builder: (context, snapshot) {
-          final path = snapshot.data?['avatar_path']?.toString();
-          final url = path == null || path.isEmpty
-              ? null
-              : Supabase.instance.client.storage.from('vedoro-avatars').getPublicUrl(path);
-          return Stack(
-            children: [
-              CircleAvatar(
-                radius: 48,
-                backgroundColor: accent,
-                backgroundImage: url == null ? null : NetworkImage(url),
-                child: url == null ? const Icon(Icons.person, size: 48, color: Colors.white) : null,
-              ),
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: Material(
-                  color: accent,
-                  shape: const CircleBorder(),
+    return SafeArea(
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 2),
+          child: Row(children: [
+            const Spacer(),
+            const Text('الملف الشخصي', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Spacer(),
+            IconButton(
+              tooltip: 'تحديث الصفحة',
+              onPressed: _editing ? null : _refreshProfile,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+          ]),
+        ),
+        FutureBuilder<Map<String, dynamic>>(
+          future: _profile,
+          builder: (context, snapshot) {
+            final p = snapshot.data ?? {};
+            final path = p['avatar_path']?.toString();
+            final url = path == null || path.isEmpty
+                ? null
+                : Supabase.instance.client.storage.from('vedoro-avatars').getPublicUrl(path);
+            final username = (p['username'] ?? 'user').toString();
+            final displayName = (p['display_name'] ?? username).toString();
+            final bio = (p['bio'] ?? '').toString();
+            return Column(children: [
+              const SizedBox(height: 5),
+              Stack(children: [
+                CircleAvatar(
+                  radius: 43,
+                  backgroundColor: accent.withValues(alpha: .22),
+                  backgroundImage: url == null ? null : NetworkImage(url),
+                  child: url == null ? const Icon(Icons.person, size: 43, color: Colors.white) : null,
+                ),
+                Positioned(right: 0, bottom: 0, child: Material(
+                  color: accent, shape: const CircleBorder(),
                   child: IconButton(
                     tooltip: 'تغيير الصورة الشخصية',
                     onPressed: _editing ? null : _changeAvatar,
-                    icon: const Icon(Icons.camera_alt, size: 18, color: Colors.white),
-                    constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+                    icon: const Icon(Icons.camera_alt, size: 16, color: Colors.white),
+                    constraints: const BoxConstraints.tightFor(width: 30, height: 30),
                     padding: EdgeInsets.zero,
                   ),
+                )),
+              ]),
+              const SizedBox(height: 8),
+              Text('@$username', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+              Text(displayName, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              if (bio.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 5, 28, 0),
+                  child: Text(bio, textAlign: TextAlign.center,
+                    maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white60, fontSize: 12)),
                 ),
-              ),
-            ],
-          );
-        },
-      ),
-      const SizedBox(height: 12),
-      FutureBuilder<Map<String, dynamic>>(
-        future: _profile,
-        builder: (context, snapshot) {
-          final p = snapshot.data ?? {};
-          final username = (p['username'] ?? 'user').toString();
-          final displayName = (p['display_name'] ?? username).toString();
-          final bio = (p['bio'] ?? '').toString();
-          return Column(children: [
-            Text('@$username', style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-            Text(displayName, style: const TextStyle(color: Colors.white70)),
-            if (bio.isNotEmpty) Padding(padding: const EdgeInsets.fromLTRB(24, 8, 24, 0), child: Text(bio, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60))),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: _editing ? null : () => _editProfile(p),
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              label: const Text('تعديل الملف الشخصي'),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsPage())),
-              icon: const Icon(Icons.notifications_none, size: 18),
-              label: const Text('الإشعارات'),
-            ),
-            const SizedBox(height: 6),
-            OutlinedButton.icon(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatorAnalyticsPage())),
-              icon: const Icon(Icons.insights_outlined, size: 18),
-              label: const Text('إحصائيات صانع المحتوى'),
-            ),
-            const SizedBox(height: 6),
-            OutlinedButton.icon(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BlockedAccountsPage())),
-              icon: const Icon(Icons.block, size: 18),
-              label: const Text('الحسابات المحظورة'),
-            ),
-          ]);
-        },
-      ),
-      if (user?.email != null)
-        Text(user!.email!, style: const TextStyle(color: Colors.white38, fontSize: 12)),
-      const SizedBox(height: 16),
-      FutureBuilder<Map<String, int>>(
-        future: _stats,
-        builder: (context, snapshot) {
-          final stats = snapshot.data ?? {'videos': 0, 'followers': 0, 'following': 0};
-          return Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            _ProfileStat(value: '${stats['videos']}', label: 'فيديو'),
-            _ProfileStat(value: '${stats['followers']}', label: 'متابعون'),
-            _ProfileStat(value: '${stats['following']}', label: 'يتابع'),
-          ]);
-        },
-      ),
-      const Divider(height: 34, color: Colors.white12),
-      FutureBuilder<bool>(
-        future: Supabase.instance.client.from('app_admins').select('user_id')
-          .eq('user_id', user?.id ?? '').maybeSingle().then((row) => row != null),
-        builder: (context, snapshot) => snapshot.data == true
-          ? Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: FilledButton.icon(
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminReviewPage())),
-                icon: const Icon(Icons.admin_panel_settings_outlined),
-                label: const Text('مراجعة المنشورات'),
-                style: FilledButton.styleFrom(backgroundColor: accent, minimumSize: const Size.fromHeight(46)),
-              ),
-            )
-          : const SizedBox.shrink(),
-      ),
-      Expanded(child: DefaultTabController(
-        length: 2,
-        child: Column(children: [
-          const TabBar(tabs: [Tab(icon: Icon(Icons.grid_on), text: 'فيديوهاتي'), Tab(icon: Icon(Icons.bookmarks_outlined), text: 'المحفوظات')]),
-          Expanded(child: TabBarView(children: [
-            _ProfilePostList(savedOnly: false),
-            _ProfilePostList(savedOnly: true),
-          ])),
-        ]),
-      )),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-        child: OutlinedButton.icon(
-          onPressed: () async {
-            await Supabase.instance.client.auth.signOut();
+              const SizedBox(height: 5),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                _profileAction(Icons.edit_outlined, 'تعديل الحساب', _editing ? () {} : () => _editProfile(p)),
+                _profileAction(Icons.insights_outlined, 'الإحصائيات', () =>
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatorAnalyticsPage()))),
+                _profileAction(Icons.block_rounded, 'المحظورون', () =>
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const BlockedAccountsPage()))),
+                _profileAction(Icons.logout_rounded, 'خروج', () async {
+                  await Supabase.instance.client.auth.signOut();
+                }),
+              ]),
+            ]);
           },
-          icon: const Icon(Icons.logout),
-          label: const Text('تسجيل الخروج'),
-          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, minimumSize: const Size.fromHeight(48)),
         ),
-      ),
-    ]));
+        FutureBuilder<Map<String, int>>(
+          future: _stats,
+          builder: (context, snapshot) {
+            final stats = snapshot.data ?? {'videos': 0, 'followers': 0, 'following': 0};
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                _ProfileStat(value: '${stats['videos']}', label: 'فيديو'),
+                _ProfileStat(value: '${stats['followers']}', label: 'متابعون'),
+                _ProfileStat(value: '${stats['following']}', label: 'يتابع'),
+              ]),
+            );
+          },
+        ),
+        FutureBuilder<bool>(
+          future: Supabase.instance.client.from('app_admins').select('user_id')
+            .eq('user_id', user?.id ?? '').maybeSingle().then((row) => row != null),
+          builder: (context, snapshot) => snapshot.data == true
+            ? Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+                child: Align(alignment: Alignment.centerRight, child: TextButton.icon(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminReviewPage())),
+                  icon: const Icon(Icons.admin_panel_settings_outlined, size: 18),
+                  label: const Text('مراجعة المنشورات'),
+                )),
+              )
+            : const SizedBox.shrink(),
+        ),
+        const Divider(height: 18, color: Colors.white12),
+        Expanded(child: DefaultTabController(
+          length: 2,
+          child: Column(children: [
+            const TabBar(tabs: [
+              Tab(icon: Icon(Icons.grid_on_rounded), text: 'فيديوهاتي'),
+              Tab(icon: Icon(Icons.bookmarks_outlined), text: 'المحفوظات'),
+            ]),
+            Expanded(child: TabBarView(children: [
+              _ProfilePostList(savedOnly: false),
+              _ProfilePostList(savedOnly: true),
+            ])),
+          ]),
+        )),
+      ]),
+    );
   }
 }
 class BlockedAccountsPage extends StatefulWidget {
