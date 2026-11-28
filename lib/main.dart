@@ -375,21 +375,40 @@ class MessagesPage extends StatelessWidget {
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
   @override
-  Widget build(BuildContext context) => SafeArea(child: Column(children: [
-    const SizedBox(height: 34),
-    const CircleAvatar(radius: 46, backgroundColor: accent, child: Icon(Icons.person, size: 48, color: Colors.white)),
-    const SizedBox(height: 12),
-    const Text('@vedoro_user', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-    const Text('عضو جديد في VEDORO', style: TextStyle(color: Colors.white54)),
-    const SizedBox(height: 24),
-    const Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-      _ProfileStat(value: '0', label: 'فيديو'),
-      _ProfileStat(value: '0', label: 'متابعون'),
-      _ProfileStat(value: '0', label: 'يتابع'),
-    ]),
-    const Divider(height: 34, color: Colors.white12),
-    const Expanded(child: Center(child: Text('سجّل الدخول حتى تنشئ ملفك وتنشر فيديوهاتك.', style: TextStyle(color: Colors.white54)))),
-  ]));
+  Widget build(BuildContext context) {
+    final user = Supabase.instance.client.auth.currentUser;
+    final metadata = user?.userMetadata ?? {};
+    final username = (metadata['username'] ?? 'عضو جديد').toString();
+    final displayName = (metadata['display_name'] ?? username).toString();
+    return SafeArea(child: Column(children: [
+      const SizedBox(height: 34),
+      const CircleAvatar(radius: 46, backgroundColor: accent, child: Icon(Icons.person, size: 48, color: Colors.white)),
+      const SizedBox(height: 12),
+      Text('@$username', style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+      Text(displayName, style: const TextStyle(color: Colors.white70)),
+      if (user?.email != null)
+        Text(user!.email!, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+      const SizedBox(height: 24),
+      const Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+        _ProfileStat(value: '0', label: 'فيديو'),
+        _ProfileStat(value: '0', label: 'متابعون'),
+        _ProfileStat(value: '0', label: 'يتابع'),
+      ]),
+      const Divider(height: 34, color: Colors.white12),
+      const Expanded(child: Center(child: Text('ملفك الشخصي على VEDORO. ستظهر فيديوهاتك وإحصاءاتك هنا.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)))),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+        child: OutlinedButton.icon(
+          onPressed: () async {
+            await Supabase.instance.client.auth.signOut();
+          },
+          icon: const Icon(Icons.logout),
+          label: const Text('تسجيل الخروج'),
+          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, minimumSize: const Size.fromHeight(48)),
+        ),
+      ),
+    ]));
+  }
 }
 class _ProfileStat extends StatelessWidget {
   const _ProfileStat({required this.value, required this.label});
