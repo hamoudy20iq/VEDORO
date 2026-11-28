@@ -1576,7 +1576,7 @@ class _ChatPageState extends State<ChatPage> {
   }
   Future<List<Map<String, dynamic>>> _load() async {
     final client = Supabase.instance.client;
-    final rows = await client.from('messages').select('id, sender_id, body, created_at, read_at')
+    final rows = await client.from('messages').select('id, sender_id, body, created_at, read_at, message_type, media_path, media_mime')
       .eq('conversation_id', widget.conversationId).order('created_at');
     final messages = List<Map<String, dynamic>>.from(rows);
     final unreadIds = messages.where((m) => m['sender_id'] != client.auth.currentUser!.id && m['read_at'] == null)
@@ -1594,7 +1594,77 @@ class _ChatPageState extends State<ChatPage> {
       final byId = {for (final p in profiles) p['id'].toString(): p};
       for (final message in messages) { message['sender_profile'] = byId[message['sender_id'].toString()]; }
     }
+    for (final message in messages) {
+      final path = message['media_path']?.toString();
+      if (path != null && path.isNotEmpty) {
+        try {
+          message['media_url'] = await client.storage.from('vedoro-chat-media').createSignedUrl(path, 3600);
+        } catch (_) {
+          message['media_url'] = null;
+        }
+      }
+    }
     return messages;
+  }
+  Future<void> _pickAndSendMedia(bool video) async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null || _sending) return;
+    try {
+      final picker = ImagePicker();
+      final picked = video
+          ? await picker.pickVideo(source: ImageSource.gallery, maxDuration: const Duration(minutes: 2))
+          : await picker.pickImage(source: ImageSource.gallery, imageQuality: 82, maxWidth: 1600);
+      if (picked == null || !mounted) return;
+      final bytes = await picked.readAsBytes();
+      final limit = video ? 50 * 1024 * 1024 : 10 * 1024 * 1024;
+      if (bytes.length > limit) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(video ? 'حجم الفيديو يجب ألا يتجاوز 50 ميغابايت' : 'حجم الصورة يجب ألا يتجاوز 10 ميغابايت'),
+        ));
+        return;
+      }
+      final ext = picked.name.contains('.') ? picked.name.split('.').last.toLowerCase() : (video ? 'mp4' : 'jpg');
+      const imageTypes = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp', 'heic': 'image/heic'};
+      const videoTypes = {'mp4': 'video/mp4', 'mov': 'video/quicktime', 'webm': 'video/webm'};
+      final mime = (video ? videoTypes : imageTypes)[ext];
+      if (mime == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('صيغة الملف غير مدعومة')));
+        return;
+      }
+      setState(() => _sending = true);
+      final path = '${widget.conversationId}/${user.id}/${DateTime.now().microsecondsSinceEpoch}.$ext';
+      await Supabase.instance.client.storage.from('vedoro-chat-media').uploadBinary(
+        path, bytes, fileOptions: FileOptions(contentType: mime, upsert: false),
+      );
+      await Supabase.instance.client.from('messages').insert({
+        'conversation_id': widget.conversationId,
+        'sender_id': user.id,
+        'body': video ? '🎬 فيديو' : '📷 صورة',
+        'message_type': video ? 'video' : 'image',
+        'media_path': path,
+        'media_mime': mime,
+      });
+      if (mounted) setState(() => _messages = _load());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر إرسال الملف: $e')));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+  Future<void> _showMediaOptions() async {
+    await showModalBottomSheet<void>(
+      context: context, backgroundColor: const Color(0xFF171720),
+      builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(leading: const Icon(Icons.image_outlined, color: accent), title: const Text('إرسال صورة'),
+          onTap: () { Navigator.pop(ctx); _pickAndSendMedia(false); }),
+        ListTile(leading: const Icon(Icons.video_library_outlined, color: accent), title: const Text('إرسال فيديو'),
+          onTap: () { Navigator.pop(ctx); _pickAndSendMedia(true); }),
+      ])),
+    );
+  }
+  Future<void> _openVideo(String url) async {
+    if (!mounted) return;
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => ChatVideoPage(url: url)));
   }
   Future<void> _blockUser() async {
     final client = Supabase.instance.client;
@@ -1671,7 +1741,30 @@ class _ChatPageState extends State<ChatPage> {
                       decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         if (!mine) Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
-                        Text(rows[i]['body'].toString()),
+                        if (rows[i]['media_type'] == 'image' && rows[i]['media_url'] != null)
+                          GestureDetector(
+                            onTap: () => showDialog<void>(context: context, builder: (ctx) => Dialog(
+                              backgroundColor: Colors.black,
+                              child: InteractiveViewer(child: Image.network(rows[i]['media_url'].toString(), fit: BoxFit.contain)),
+                            )),
+                            child: ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(
+                              rows[i]['media_url'].toString(), width: 220, height: 190, fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, size: 48),
+                            )),
+                          ),
+                        if (rows[i]['message_type'] == 'video')
+                          InkWell(
+                            onTap: rows[i]['media_url'] == null ? null : () => _openVideo(rows[i]['media_url'].toString()),
+                            child: Container(width: 220, height: 130, decoration: BoxDecoration(
+                              color: Colors.black26, borderRadius: BorderRadius.circular(10)),
+                              child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                Icon(Icons.play_circle_fill, size: 52, color: accent),
+                                Text('تشغيل الفيديو'),
+                              ]),
+                            ),
+                          ),
+                        if ((rows[i]['message_type'] ?? 'text') == 'text')
+                          Text(rows[i]['body'].toString()),
                         if (mine) Padding(
                           padding: const EdgeInsets.only(top: 5),
                           child: Text(
@@ -1687,6 +1780,7 @@ class _ChatPageState extends State<ChatPage> {
           },
         )),
         SafeArea(child: Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 12), child: Row(children: [
+          IconButton(onPressed: _sending ? null : _showMediaOptions, icon: const Icon(Icons.add_circle_outline, color: accent)),
           Expanded(child: TextField(controller: _input, textInputAction: TextInputAction.send,
             onSubmitted: (_) => _send(), decoration: InputDecoration(hintText: 'اكتب رسالة...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
           IconButton(onPressed: _sending ? null : _send, icon: const Icon(Icons.send, color: accent)),
@@ -1694,6 +1788,44 @@ class _ChatPageState extends State<ChatPage> {
       ]),
     );
   }
+}
+
+
+class ChatVideoPage extends StatefulWidget {
+  const ChatVideoPage({super.key, required this.url});
+  final String url;
+  @override
+  State<ChatVideoPage> createState() => _ChatVideoPageState();
+}
+class _ChatVideoPageState extends State<ChatVideoPage> {
+  late final VideoPlayerController _controller;
+  late final Future<void> _initialized;
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _initialized = _controller.initialize().then((_) { if (mounted) setState(() {}); });
+  }
+  @override
+  void dispose() { _controller.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('مشاهدة الفيديو')),
+    body: Center(child: FutureBuilder<void>(
+      future: _initialized,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const Text('تعذر تشغيل الفيديو');
+        if (snapshot.connectionState != ConnectionState.done) return const CircularProgressIndicator(color: accent);
+        return AspectRatio(aspectRatio: _controller.value.aspectRatio, child: Stack(
+          alignment: Alignment.center, children: [
+            VideoPlayer(_controller),
+            IconButton(iconSize: 64, color: Colors.white, icon: Icon(_controller.value.isPlaying ? Icons.pause_circle : Icons.play_circle),
+              onPressed: () { setState(() { _controller.value.isPlaying ? _controller.pause() : _controller.play(); }); }),
+          ],
+        ));
+      },
+    )),
+  );
 }
 
 class ProfilePage extends StatefulWidget {
