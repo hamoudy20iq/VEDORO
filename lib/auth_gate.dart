@@ -105,6 +105,11 @@ class _AuthScreenState extends State<AuthScreen> {
     return message;
   }
 
+  bool _isValidEmail(String value) {
+    final email = value.trim();
+    return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email);
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
@@ -132,8 +137,8 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } on AuthException catch (e) {
       _message(_friendlyError(e.message), error: true);
-    } catch (_) {
-      _message('تعذر إكمال العملية. تحقق من الإنترنت وحاول مرة ثانية.', error: true);
+    } catch (e) {
+      _message('تعذر إكمال العملية: $e', error: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -141,7 +146,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
   Future<void> _resetPassword() async {
     final email = _email.text.trim().toLowerCase();
-    if (!RegExp(r'^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$').hasMatch(email)) {
+    if (!_isValidEmail(email)) {
       _message('اكتب بريدك الإلكتروني الصحيح أولاً.', error: true);
       return;
     }
@@ -151,8 +156,8 @@ class _AuthScreenState extends State<AuthScreen> {
       _message('إذا كان البريد مسجلاً، راح توصلك رسالة لاستعادة كلمة المرور.');
     } on AuthException catch (e) {
       _message(_friendlyError(e.message), error: true);
-    } catch (_) {
-      _message('تعذر إرسال رابط الاستعادة. تحقق من الإنترنت.', error: true);
+    } catch (e) {
+      _message('تعذر إرسال رابط الاستعادة: $e', error: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -206,13 +211,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       label: 'البريد الإلكتروني',
                       icon: Icons.email_outlined,
                       keyboardType: TextInputType.emailAddress,
-                      validator: (value) {
-                        final v = (value ?? '').trim();
-                        if (!RegExp(r'^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$').hasMatch(v)) {
-                          return 'أدخل بريداً إلكترونياً صحيحاً';
-                        }
-                        return null;
-                      },
+                      validator: (value) => !_isValidEmail(value ?? '')
+                          ? 'أدخل بريداً إلكترونياً صحيحاً' : null,
                     ),
                     const SizedBox(height: 14),
                     TextFormField(
