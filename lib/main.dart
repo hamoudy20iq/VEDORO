@@ -1,206 +1,336 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
 
 void main() => runApp(const VedoroApp());
 
-const purple = Color(0xFF925CFF);
-const bg = Color(0xFF0D0D18);
-const panel = Color(0xFF1A1A2B);
+const accent = Color(0xFF9B6DFF);
+const background = Color(0xFF08080D);
 
 class VedoroApp extends StatelessWidget {
   const VedoroApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'VEDORO',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: bg,
-        colorScheme: ColorScheme.fromSeed(seedColor: purple, brightness: Brightness.dark),
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    title: 'VEDORO',
+    theme: ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: background,
+      colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark),
+      useMaterial3: true,
+    ),
+    home: const MainScreen(),
+  );
+}
+
+class DemoVideo {
+  const DemoVideo({required this.url, required this.user, required this.caption, required this.music, required this.likes});
+  final String url;
+  final String user;
+  final String caption;
+  final String music;
+  final String likes;
+}
+
+const demoVideos = [
+  DemoVideo(
+    url: 'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4',
+    user: '@vedoro', caption: 'أهلاً بيكم بعالم VEDORO 💜 بداية مجتمعنا الجديد!',
+    music: 'الصوت الأصلي - VEDORO', likes: '12.8K',
+  ),
+  DemoVideo(
+    url: 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+    user: '@creator', caption: 'كل لحظة بيها قصة تستحق تنشاف ✨',
+    music: 'موسيقى هادئة', likes: '8,420',
+  ),
+];
+
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int tab = 0;
+  int activeVideo = 0;
+
+  void openTab(int index) {
+    if (index == 2) {
+      _showCreateNotice();
+      return;
+    }
+    setState(() => tab = index);
+  }
+
+  void _showCreateNotice() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF191922),
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.video_call_rounded, size: 48, color: accent),
+            const SizedBox(height: 12),
+            const Text('انشر فيديوك على VEDORO', style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text('ميزة اختيار الفيديو ورفعه من الهاتف قيد التطوير بالمرحلة القادمة.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white60)),
+            const SizedBox(height: 16),
+            FilledButton(onPressed: () => Navigator.pop(context), child: const Text('تمام')),
+          ]),
+        ),
       ),
-      home: const HomePage(),
     );
   }
-}
-
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  int page = 0;
-  final controller = TextEditingController();
-
-  @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
-  }
-
-  Widget home() => ListView(
-    padding: const EdgeInsets.all(20),
-    children: [
-      const SizedBox(height: 15),
-      const Text('أهلاً بك في', style: TextStyle(color: Colors.white70, fontSize: 18)),
-      const Text('VEDORO', style: TextStyle(fontSize: 38, fontWeight: FontWeight.bold, color: purple)),
-      const Text('عالم الفيديو والصوت بين يديك'),
-      const SizedBox(height: 30),
-      Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: [Color(0xFF512B91), Color(0xFF201A38)]),
-          borderRadius: BorderRadius.circular(22),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Icon(Icons.download_for_offline, size: 45),
-            const SizedBox(height: 12),
-            const Text('تنزيل الوسائط', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            const Text('الصق رابط الفيديو أو الملف المباشر'),
-            const SizedBox(height: 15),
-            TextField(
-              controller: controller,
-              textDirection: TextDirection.ltr,
-              decoration: InputDecoration(
-                hintText: 'https://example.com/video',
-                filled: true,
-                fillColor: bg,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-                prefixIcon: const Icon(Icons.link, color: purple),
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: purple, foregroundColor: Colors.white, padding: const EdgeInsets.all(15)),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(controller.text.trim().isEmpty ? 'أدخل الرابط أولاً' : 'سيتم تفعيل تحليل الروابط في المرحلة القادمة')),
-                  );
-                },
-                icon: const Icon(Icons.search),
-                label: const Text('تحليل الرابط'),
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 25),
-      const Text('خدمات التطبيق', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 15),
-      feature(Icons.video_library, 'الفيديوهات', 'تشغيل وإدارة الفيديو'),
-      feature(Icons.music_note, 'الصوتيات', 'مكتبة الملفات الصوتية'),
-      feature(Icons.folder, 'ملفاتي', 'ملفاتك المحفوظة'),
-    ],
-  );
-
-  Widget feature(IconData icon, String title, String subtitle) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.all(18),
-    decoration: BoxDecoration(color: panel, borderRadius: BorderRadius.circular(17)),
-    child: Row(children: [
-      Icon(icon, color: purple, size: 30),
-      const SizedBox(width: 15),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        Text(subtitle, style: const TextStyle(color: Colors.white54)),
-      ])),
-      const Icon(Icons.chevron_right),
-    ]),
-  );
-
-  Widget emptyPage(IconData icon, String title, String subtitle) => Center(
-    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(icon, color: purple, size: 75),
-      const SizedBox(height: 15),
-      Text(title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 8),
-      Text(subtitle, style: const TextStyle(color: Colors.white54)),
-    ]),
-  );
-
-  Widget about() => Center(
-    child: SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(25),
-        decoration: BoxDecoration(color: panel, borderRadius: BorderRadius.circular(22)),
-        child: Column(children: [
-          const Icon(Icons.play_circle_fill, color: purple, size: 85),
-          const SizedBox(height: 12),
-          const Text('VEDORO', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: purple)),
-          const Text('Your world. One app.', style: TextStyle(color: Colors.white54)),
-          const Divider(height: 40),
-          const Text('حول التطبيق', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 20),
-          const Text('تم تطوير البرنامج بواسطة', style: TextStyle(color: Colors.white60)),
-          const SizedBox(height: 8),
-          const Text('أبو عوض الحجي', style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 25),
-          const Text('تابع المطور على إنستغرام'),
-          const SizedBox(height: 12),
-          InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () async {
-              final uri = Uri.parse('https://www.instagram.com/h6v_l/');
-              await launchUrl(uri, mode: LaunchMode.externalApplication);
-            },
-            child: Container(
-              padding: const EdgeInsets.all(15),
-              decoration: BoxDecoration(color: purple.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(14)),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.camera_alt, color: purple),
-                SizedBox(width: 10),
-                Text('@h6v_l', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                SizedBox(width: 8),
-                Icon(Icons.open_in_new, color: purple),
-              ]),
-            ),
-          ),
-          const SizedBox(height: 30),
-          const Text('الإصدار 1.0.0'),
-          const SizedBox(height: 12),
-          const Text('جميع الحقوق محفوظة © أبو عوض الحجي', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 12)),
-        ]),
-      ),
-    ),
-  );
 
   @override
   Widget build(BuildContext context) {
-    final widgets = [
-      home(),
-      emptyPage(Icons.downloading, 'التنزيلات', 'ستظهر تنزيلاتك هنا'),
-      emptyPage(Icons.video_library, 'مكتبتي', 'ملفاتك المحفوظة'),
-      about(),
+    final pages = [
+      FeedScreen(onPageChanged: (i) => activeVideo = i),
+      const SimplePage(icon: Icons.explore_outlined, title: 'اكتشف', subtitle: 'قريباً ستجد هنا الفيديوهات والحسابات الرائجة.'),
+      const SizedBox.shrink(),
+      const SimplePage(icon: Icons.chat_bubble_outline, title: 'الرسائل', subtitle: 'محادثاتك الخاصة ستظهر هنا بعد ربط الحسابات.'),
+      const SimplePage(icon: Icons.person_outline, title: 'الملف الشخصي', subtitle: 'ملفك الشخصي وفيديوهاتك ومتابعوك — قريباً.'),
     ];
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: bg,
-        centerTitle: true,
-        title: Text(['VEDORO', 'التنزيلات', 'مكتبتي', 'حول التطبيق'][page], style: const TextStyle(fontWeight: FontWeight.bold)),
-      ),
-      body: widgets[page],
+      body: IndexedStack(index: tab, children: pages),
       bottomNavigationBar: NavigationBar(
-        backgroundColor: panel,
-        indicatorColor: purple.withValues(alpha: 0.25),
-        selectedIndex: page,
-        onDestinationSelected: (i) => setState(() => page = i),
+        height: 66,
+        backgroundColor: const Color(0xFF111118),
+        indicatorColor: accent.withValues(alpha: .18),
+        selectedIndex: tab,
+        onDestinationSelected: openTab,
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), label: 'الرئيسية'),
-          NavigationDestination(icon: Icon(Icons.download_outlined), label: 'التنزيلات'),
-          NavigationDestination(icon: Icon(Icons.video_library_outlined), label: 'مكتبتي'),
-          NavigationDestination(icon: Icon(Icons.info_outline), label: 'حول'),
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'الرئيسية'),
+          NavigationDestination(icon: Icon(Icons.explore_outlined), selectedIcon: Icon(Icons.explore), label: 'اكتشف'),
+          NavigationDestination(icon: Icon(Icons.add_box_outlined), selectedIcon: Icon(Icons.add_box), label: 'نشر'),
+          NavigationDestination(icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'الرسائل'),
+          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'حسابي'),
         ],
       ),
     );
   }
+}
+
+class FeedScreen extends StatefulWidget {
+  const FeedScreen({super.key, required this.onPageChanged});
+  final ValueChanged<int> onPageChanged;
+  @override
+  State<FeedScreen> createState() => _FeedScreenState();
+}
+
+class _FeedScreenState extends State<FeedScreen> {
+  int current = 0;
+  @override
+  Widget build(BuildContext context) => Stack(children: [
+    PageView.builder(
+      scrollDirection: Axis.vertical,
+      itemCount: demoVideos.length,
+      onPageChanged: (index) {
+        setState(() => current = index);
+        widget.onPageChanged(index);
+      },
+      itemBuilder: (context, index) => VideoFeedItem(
+        key: ValueKey(index), video: demoVideos[index], active: current == index,
+      ),
+    ),
+    SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text('لك', style: TextStyle(color: Colors.white.withValues(alpha: .72), fontSize: 16)),
+          const SizedBox(width: 22),
+          const Text('متابَعون', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+        ]),
+      ),
+    ),
+  ]);
+}
+
+class VideoFeedItem extends StatefulWidget {
+  const VideoFeedItem({super.key, required this.video, required this.active});
+  final DemoVideo video;
+  final bool active;
+  @override
+  State<VideoFeedItem> createState() => _VideoFeedItemState();
+}
+
+class _VideoFeedItemState extends State<VideoFeedItem> {
+  VideoPlayerController? controller;
+  bool liked = false;
+  bool following = false;
+  bool showControls = false;
+  bool failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = VideoPlayerController.networkUrl(Uri.parse(widget.video.url))
+      ..setLooping(true)
+      ..initialize().then((_) {
+        if (!mounted) return;
+        setState(() {});
+        if (widget.active) controller!.play();
+      }).catchError((_) {
+        if (mounted) setState(() => failed = true);
+      });
+  }
+
+  @override
+  void didUpdateWidget(covariant VideoFeedItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.active != widget.active && controller?.value.isInitialized == true) {
+      if (widget.active) {
+        controller!.play();
+      } else {
+        controller!.pause();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    controller?.dispose();
+    super.dispose();
+  }
+
+  void togglePlayback() {
+    if (controller?.value.isInitialized != true) return;
+    setState(() {
+      if (controller!.value.isPlaying) {
+        controller!.pause();
+      } else {
+        controller!.play();
+      }
+      showControls = true;
+    });
+  }
+
+  void showComments() {
+    final input = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF171720),
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SizedBox(
+          height: 390,
+          child: Column(children: [
+            const SizedBox(height: 18),
+            const Text('التعليقات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Divider(color: Colors.white12),
+            const Expanded(child: Center(child: Text('كن أول من يعلّق على هذا الفيديو', style: TextStyle(color: Colors.white54)))),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
+              child: Row(children: [
+                Expanded(child: TextField(controller: input, decoration: InputDecoration(hintText: 'اكتب تعليقاً...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
+                IconButton(onPressed: () { Navigator.pop(context); }, icon: const Icon(Icons.send, color: accent)),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    ).whenComplete(input.dispose);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ready = controller?.value.isInitialized == true;
+    return GestureDetector(
+      onTap: togglePlayback,
+      child: Stack(fit: StackFit.expand, children: [
+        Container(
+          color: const Color(0xFF171323),
+          child: ready
+            ? FittedBox(fit: BoxFit.cover, child: SizedBox(width: controller!.value.size.width, height: controller!.value.size.height, child: VideoPlayer(controller!)))
+            : Center(child: failed
+              ? const Icon(Icons.play_circle_outline, size: 76, color: Colors.white54)
+              : const CircularProgressIndicator(color: accent)),
+        ),
+        const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black54, Colors.transparent, Colors.transparent, Colors.black87], stops: [0, .2, .55, 1]))),
+        if (showControls && ready && !controller!.value.isPlaying)
+          const Center(child: Icon(Icons.play_arrow_rounded, size: 78, color: Colors.white)),
+        Positioned(
+          right: 12, bottom: 24,
+          child: Column(children: [
+            const CircleAvatar(radius: 24, backgroundColor: Colors.white24, child: Icon(Icons.person, color: Colors.white)),
+            const SizedBox(height: 22),
+            _ActionButton(icon: liked ? Icons.favorite : Icons.favorite_border, label: liked ? 'أعجبني' : widget.video.likes, color: liked ? Colors.pinkAccent : Colors.white, onTap: () => setState(() => liked = !liked)),
+            const SizedBox(height: 20),
+            _ActionButton(icon: Icons.mode_comment_outlined, label: 'تعليق', onTap: showComments),
+            const SizedBox(height: 20),
+            _ActionButton(icon: Icons.share_outlined, label: 'مشاركة', onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مشاركة الفيديو ستُفعّل قريباً')))),
+            const SizedBox(height: 20),
+            _ActionButton(icon: Icons.music_note, label: 'الصوت', onTap: () {}),
+          ]),
+        ),
+        Positioned(
+          left: 16, right: 86, bottom: 28,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Text(widget.video.user, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(width: 10),
+              OutlinedButton(
+                onPressed: () => setState(() => following = !following),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white70), padding: const EdgeInsets.symmetric(horizontal: 12), minimumSize: const Size(0, 30)),
+                child: Text(following ? 'تتابعه' : 'متابعة'),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Text(widget.video.caption, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+            const SizedBox(height: 10),
+            Row(children: [
+              const Icon(Icons.music_note, size: 16),
+              const SizedBox(width: 6),
+              Expanded(child: Text(widget.video.music, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
+            ]),
+          ]),
+        ),
+        if (ready)
+          Positioned(left: 0, right: 0, bottom: 0, child: VideoProgressIndicator(controller!, allowScrubbing: true, colors: const VideoProgressColors(playedColor: accent, backgroundColor: Colors.white24, bufferedColor: Colors.white38))),
+      ]),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({required this.icon, required this.label, required this.onTap, this.color = Colors.white});
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color color;
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    child: Column(children: [
+      Icon(icon, size: 32, color: color, shadows: const [Shadow(color: Colors.black54, blurRadius: 8)]),
+      const SizedBox(height: 5),
+      Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, shadows: [Shadow(color: Colors.black, blurRadius: 5)])),
+    ]),
+  );
+}
+
+class SimplePage extends StatelessWidget {
+  const SimplePage({super.key, required this.icon, required this.title, required this.subtitle});
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(30),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        const Text('VEDORO', style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 27, letterSpacing: 2)),
+        const SizedBox(height: 28),
+        Icon(icon, size: 68, color: accent),
+        const SizedBox(height: 16),
+        Text(title, style: const TextStyle(fontSize: 23, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        Text(subtitle, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60, height: 1.6)),
+      ]),
+    ),
+  );
 }
