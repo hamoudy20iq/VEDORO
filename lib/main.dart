@@ -2720,6 +2720,18 @@ class _ProfilePageState extends State<ProfilePage> {
             const Text('الملف الشخصي', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const Spacer(),
             IconButton(
+              tooltip: 'الإعدادات',
+              onPressed: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => SettingsPage(
+                  onEditProfile: () async {
+                    final current = await _profile;
+                    if (mounted) _editProfile(current);
+                  },
+                ),
+              )),
+              icon: const Icon(Icons.settings_outlined),
+            ),
+            IconButton(
               tooltip: 'تحديث الصفحة',
               onPressed: _editing ? null : _refreshProfile,
               icon: const Icon(Icons.refresh_rounded),
@@ -2827,6 +2839,143 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 }
+
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key, required this.onEditProfile});
+  final VoidCallback onEditProfile;
+
+  void _openInfo(BuildContext context, String title, String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF191922),
+        title: Text(title),
+        content: Text(message, style: const TextStyle(color: Colors.white70, height: 1.5)),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً'))],
+      ),
+    );
+  }
+
+  Future<void> _sendPasswordReset(BuildContext context) async {
+    final email = Supabase.instance.client.auth.currentUser?.email;
+    if (email == null || email.isEmpty) {
+      _openInfo(context, 'تعذر إرسال الرابط', 'لا يوجد بريد إلكتروني مرتبط بهذا الحساب.');
+      return;
+    }
+    try {
+      await Supabase.instance.client.auth.resetPasswordForEmail(email);
+      if (context.mounted) _openInfo(context, 'تحقق من بريدك', 'أرسلنا رابط تغيير كلمة المرور إلى $email');
+    } catch (e) {
+      if (context.mounted) _openInfo(context, 'لم يتم الإرسال', 'حدث خطأ أثناء إرسال رابط تغيير كلمة المرور. حاول مرة أخرى لاحقاً.');
+    }
+  }
+
+  Widget _sectionTitle(String title) => Padding(
+    padding: const EdgeInsets.fromLTRB(18, 22, 18, 8),
+    child: Align(alignment: Alignment.centerRight, child: Text(
+      title, style: const TextStyle(color: accent, fontSize: 13, fontWeight: FontWeight.bold),
+    )),
+  );
+
+  Widget _settingTile({
+    required IconData icon, required String title, required String subtitle,
+    required VoidCallback onTap, Color? iconColor,
+  }) => ListTile(
+    contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 2),
+    leading: Container(
+      width: 42, height: 42,
+      decoration: BoxDecoration(color: (iconColor ?? accent).withValues(alpha: .13), borderRadius: BorderRadius.circular(14)),
+      child: Icon(icon, color: iconColor ?? accent),
+    ),
+    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+    subtitle: Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+    trailing: const Icon(Icons.chevron_left_rounded, color: Colors.white38),
+    onTap: onTap,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final user = Supabase.instance.client.auth.currentUser;
+    return Scaffold(
+      backgroundColor: const Color(0xFF101017),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF101017),
+        title: const Text('الإعدادات والخصوصية', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        centerTitle: true,
+      ),
+      body: ListView(
+        children: [
+          _sectionTitle('الحساب'),
+          _settingTile(
+            icon: Icons.person_outline_rounded, title: 'معلومات الحساب',
+            subtitle: user?.email ?? 'إدارة بيانات ملفك الشخصي',
+            onTap: onEditProfile,
+          ),
+          _settingTile(
+            icon: Icons.lock_outline_rounded, title: 'كلمة المرور والأمان',
+            subtitle: 'إرسال رابط آمن لتغيير كلمة المرور',
+            onTap: () => _sendPasswordReset(context),
+          ),
+          _sectionTitle('الخصوصية والتفاعل'),
+          _settingTile(
+            icon: Icons.block_rounded, title: 'الحسابات المحظورة',
+            subtitle: 'عرض الحسابات التي حظرتها وإلغاء الحظر',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BlockedAccountsPage())),
+          ),
+          _settingTile(
+            icon: Icons.visibility_outlined, title: 'خصوصية المحتوى',
+            subtitle: 'من يمكنه مشاهدة منشوراتك على VEDORO',
+            onTap: () => _openInfo(context, 'خصوصية المحتوى',
+              'المنشورات العامة المعتمدة تظهر في صفحة اكتشف وخلاصة الفيديو. إعدادات الجمهور المخصصة ستتوفر لاحقاً بعد ربطها بنظام صلاحيات النشر.'),
+          ),
+          _settingTile(
+            icon: Icons.notifications_none_rounded, title: 'الإشعارات',
+            subtitle: 'إدارة تنبيهات النشاط والرسائل',
+            onTap: () => _openInfo(context, 'الإشعارات',
+              'يمكنك مشاهدة تنبيهات الإعجابات والتعليقات والمتابعات والرسائل من تبويب الإشعارات. مفاتيح التحكم التفصيلية بالتنبيهات قيد الإضافة.'),
+          ),
+          _sectionTitle('حول التطبيق'),
+          _settingTile(
+            icon: Icons.info_outline_rounded, title: 'حول VEDORO',
+            subtitle: 'منصتك الاجتماعية للفيديوهات والقصص والرسائل',
+            onTap: () => _openInfo(context, 'VEDORO', 'VEDORO — مجتمع يجمع الفيديوهات القصيرة والقصص والرسائل في تجربة واحدة.'),
+          ),
+          const SizedBox(height: 18),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+                side: const BorderSide(color: Colors.redAccent),
+                minimumSize: const Size.fromHeight(48),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              icon: const Icon(Icons.logout_rounded),
+              label: const Text('تسجيل الخروج'),
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF191922),
+                    title: const Text('تسجيل الخروج؟'),
+                    content: const Text('هل تريد تسجيل الخروج من حساب VEDORO؟'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+                      TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('خروج', style: TextStyle(color: Colors.redAccent))),
+                    ],
+                  ),
+                );
+                if (confirm == true) await Supabase.instance.client.auth.signOut();
+              },
+            ),
+          ),
+          const SizedBox(height: 30),
+        ],
+      ),
+    );
+  }
+}
+
 class BlockedAccountsPage extends StatefulWidget {
   const BlockedAccountsPage({super.key});
   @override
