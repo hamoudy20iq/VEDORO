@@ -1560,7 +1560,7 @@ class ExplorePage extends StatefulWidget {
 class _ExplorePageState extends State<ExplorePage> {
   final _search = TextEditingController();
   int _tab = 0;
-  Future<List<Map<String, dynamic>>>? _results;
+  Future<List<dynamic>>? _results;
   late Future<List<Map<String, dynamic>>> _trending;
 
   @override
