@@ -3464,7 +3464,14 @@ class _NotificationsPageState extends State<NotificationsPage> {
               tileColor: read ? null : accent.withValues(alpha: .06),
               onTap: () async {
                 await _markRead(row['id'].toString());
-                if (row['post_id'] != null && mounted) {
+                if (!mounted) return;
+                if (type == 'follow_request') {
+                  await Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => const FollowRequestsPage(),
+                  ));
+                  return;
+                }
+                if (row['post_id'] != null) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('تمت قراءة الإشعار')),
                   );
