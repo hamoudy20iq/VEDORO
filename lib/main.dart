@@ -36,13 +36,24 @@ class VedoroApp extends StatelessWidget {
 }
 
 class DemoVideo {
-  const DemoVideo({required this.url, required this.user, required this.caption, required this.music, required this.likes, this.status = 'approved'});
+  const DemoVideo({
+    required this.url, required this.user, required this.caption,
+    required this.music, required this.likes, this.status = 'approved',
+    this.postId, this.authorId, this.likeCount = 0, this.commentCount = 0,
+    this.isLiked = false, this.isFollowing = false,
+  });
   final String url;
   final String user;
   final String caption;
   final String music;
   final String likes;
   final String status;
+  final String? postId;
+  final String? authorId;
+  final int likeCount;
+  final int commentCount;
+  final bool isLiked;
+  final bool isFollowing;
 }
 
 const demoVideos = [
@@ -307,6 +318,7 @@ class _FeedScreenState extends State<FeedScreen> {
         .limit(40);
     if (rows.isEmpty) return [];
 
+    final postIds = rows.map((row) => row['id'] as String).toList();
     final authorIds = rows.map((row) => row['author_id'] as String).toSet().toList();
     final profileRows = await client.from('profiles')
         .select('id, username')
@@ -316,18 +328,46 @@ class _FeedScreenState extends State<FeedScreen> {
         profile['id'] as String: '@${profile['username'] ?? 'user'}',
     };
 
+    final likeRows = await client.from('post_likes')
+        .select('post_id, user_id').inFilter('post_id', postIds);
+    final commentRows = await client.from('comments')
+        .select('post_id').inFilter('post_id', postIds);
+    final followRows = await client.from('follows')
+        .select('followed_id').eq('follower_id', user.id).inFilter('followed_id', authorIds);
+    final likeCounts = <String, int>{};
+    final commentCounts = <String, int>{};
+    final likedPosts = <String>{};
+    final followedUsers = followRows.map((x) => x['followed_id'] as String).toSet();
+    for (final item in likeRows) {
+      final id = item['post_id'] as String;
+      likeCounts[id] = (likeCounts[id] ?? 0) + 1;
+      if (item['user_id'] == user.id) likedPosts.add(id);
+    }
+    for (final item in commentRows) {
+      final id = item['post_id'] as String;
+      commentCounts[id] = (commentCounts[id] ?? 0) + 1;
+    }
+
     final result = <DemoVideo>[];
     for (final row in rows) {
       final path = row['media_path'] as String?;
       if (path == null || path.isEmpty) continue;
+      final postId = row['id'] as String;
+      final authorId = row['author_id'] as String;
       try {
         final url = await client.storage.from('vedoro-videos').createSignedUrl(path, 3600);
         result.add(DemoVideo(
+          postId: postId,
+          authorId: authorId,
           url: url,
-          user: names[row['author_id']] ?? '@vedoro',
+          user: names[authorId] ?? '@vedoro',
           caption: (row['caption'] ?? '').toString(),
           music: 'الصوت الأصلي',
-          likes: '0',
+          likes: '${likeCounts[postId] ?? 0}',
+          likeCount: likeCounts[postId] ?? 0,
+          commentCount: commentCounts[postId] ?? 0,
+          isLiked: likedPosts.contains(postId),
+          isFollowing: followedUsers.contains(authorId),
           status: (row['moderation_status'] ?? 'pending').toString(),
         ));
       } catch (_) {
@@ -400,17 +440,25 @@ class VideoFeedItem extends StatefulWidget {
 
 class _VideoFeedItemState extends State<VideoFeedItem> {
   VideoPlayerController? controller;
-  bool liked = false;
-  bool following = false;
+  late bool liked;
+  late bool following;
+  late int likeCount;
+  late int commentCount;
   bool showControls = false;
   bool failed = false;
   bool muted = false;
   bool saved = false;
   final List<String> comments = [];
+  bool commentsLoading = false;
+  bool actionBusy = false;
 
   @override
   void initState() {
     super.initState();
+    liked = widget.video.isLiked;
+    following = widget.video.isFollowing;
+    likeCount = widget.video.likeCount;
+    commentCount = widget.video.commentCount;
     controller = VideoPlayerController.networkUrl(Uri.parse(widget.video.url))
       ..setLooping(true)
       ..initialize().then((_) {
@@ -452,6 +500,98 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     });
   }
 
+  Future<void> _loadComments(StateSetter refreshSheet) async {
+    final postId = widget.video.postId;
+    if (postId == null) return;
+    refreshSheet(() => commentsLoading = true);
+    try {
+      final rows = await Supabase.instance.client.from('comments')
+          .select('body').eq('post_id', postId)
+          .order('created_at', ascending: true).limit(100);
+      comments
+        ..clear()
+        ..addAll(rows.map((row) => row['body'].toString()));
+    } catch (e) {
+      if (mounted) _showActionError('تعذر تحميل التعليقات: $e');
+    } finally {
+      refreshSheet(() => commentsLoading = false);
+    }
+  }
+
+  Future<void> _sendComment(String value, StateSetter refreshSheet) async {
+    final postId = widget.video.postId;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (postId == null || user == null || value.trim().isEmpty) return;
+    try {
+      await Supabase.instance.client.from('comments').insert({
+        'post_id': postId, 'author_id': user.id, 'body': value.trim(),
+      });
+      comments.add(value.trim());
+      if (mounted) setState(() => commentCount++);
+      refreshSheet(() {});
+    } catch (e) {
+      if (mounted) _showActionError('تعذر إرسال التعليق: $e');
+    }
+  }
+
+  void _showActionError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red.shade700),
+    );
+  }
+
+  Future<void> _toggleLike() async {
+    final postId = widget.video.postId;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (postId == null || user == null || actionBusy) return;
+    final wasLiked = liked;
+    setState(() {
+      liked = !wasLiked;
+      likeCount += wasLiked ? -1 : 1;
+      actionBusy = true;
+    });
+    try {
+      if (wasLiked) {
+        await Supabase.instance.client.from('post_likes')
+            .delete().eq('post_id', postId).eq('user_id', user.id);
+      } else {
+        await Supabase.instance.client.from('post_likes')
+            .insert({'post_id': postId, 'user_id': user.id});
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() { liked = wasLiked; likeCount += wasLiked ? 1 : -1; });
+        _showActionError('تعذر تحديث الإعجاب: $e');
+      }
+    } finally {
+      if (mounted) setState(() => actionBusy = false);
+    }
+  }
+
+  Future<void> _toggleFollow() async {
+    final authorId = widget.video.authorId;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (authorId == null || user == null || authorId == user.id || actionBusy) return;
+    final wasFollowing = following;
+    setState(() { following = !wasFollowing; actionBusy = true; });
+    try {
+      if (wasFollowing) {
+        await Supabase.instance.client.from('follows')
+            .delete().eq('follower_id', user.id).eq('followed_id', authorId);
+      } else {
+        await Supabase.instance.client.from('follows')
+            .insert({'follower_id': user.id, 'followed_id': authorId});
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => following = wasFollowing);
+        _showActionError('تعذرت عملية المتابعة: $e');
+      }
+    } finally {
+      if (mounted) setState(() => actionBusy = false);
+    }
+  }
+
   void showComments() {
     final input = TextEditingController();
     showModalBottomSheet(
@@ -459,33 +599,42 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
       isScrollControlled: true,
       backgroundColor: const Color(0xFF171720),
       builder: (sheetContext) => StatefulBuilder(
-        builder: (context, refreshSheet) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-          child: SizedBox(
-            height: 430,
-            child: Column(children: [
-              const SizedBox(height: 18),
-              Text('التعليقات ${comments.length}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const Divider(color: Colors.white12),
-              Expanded(child: comments.isEmpty
-                ? const Center(child: Text('كن أول من يعلّق على هذا الفيديو', style: TextStyle(color: Colors.white54)))
-                : ListView.builder(itemCount: comments.length, itemBuilder: (_, i) => ListTile(leading: const CircleAvatar(child: Icon(Icons.person)), title: Text(comments[i])))),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
-                child: Row(children: [
-                  Expanded(child: TextField(controller: input, textInputAction: TextInputAction.send, onSubmitted: (_) {
-                    final value = input.text.trim();
-                    if (value.isNotEmpty) { setState(() => comments.add(value)); input.clear(); refreshSheet(() {}); }
-                  }, decoration: InputDecoration(hintText: 'اكتب تعليقاً...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
-                  IconButton(onPressed: () {
-                    final value = input.text.trim();
-                    if (value.isNotEmpty) { setState(() => comments.add(value)); input.clear(); refreshSheet(() {}); }
-                  }, icon: const Icon(Icons.send, color: accent)),
-                ]),
-              ),
-            ]),
-          ),
-        ),
+        builder: (context, refreshSheet) {
+          if (!commentsLoading && comments.isEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (sheetContext.mounted && !commentsLoading) _loadComments(refreshSheet);
+            });
+          }
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+            child: SizedBox(
+              height: 430,
+              child: Column(children: [
+                const SizedBox(height: 18),
+                Text('التعليقات $commentCount', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const Divider(color: Colors.white12),
+                Expanded(child: commentsLoading
+                  ? const Center(child: CircularProgressIndicator(color: accent))
+                  : comments.isEmpty
+                    ? const Center(child: Text('كن أول من يعلّق على هذا الفيديو', style: TextStyle(color: Colors.white54)))
+                    : ListView.builder(itemCount: comments.length, itemBuilder: (_, i) => ListTile(leading: const CircleAvatar(child: Icon(Icons.person)), title: Text(comments[i])))),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
+                  child: Row(children: [
+                    Expanded(child: TextField(controller: input, textInputAction: TextInputAction.send, onSubmitted: (_) async {
+                      final value = input.text.trim();
+                      if (value.isNotEmpty) { input.clear(); await _sendComment(value, refreshSheet); }
+                    }, decoration: InputDecoration(hintText: 'اكتب تعليقاً...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
+                    IconButton(onPressed: () async {
+                      final value = input.text.trim();
+                      if (value.isNotEmpty) { input.clear(); await _sendComment(value, refreshSheet); }
+                    }, icon: const Icon(Icons.send, color: accent)),
+                  ]),
+                ),
+              ]),
+            ),
+          );
+        },
       ),
     ).whenComplete(input.dispose);
   }
@@ -512,9 +661,9 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
           child: Column(children: [
             const CircleAvatar(radius: 24, backgroundColor: Colors.white24, child: Icon(Icons.person, color: Colors.white)),
             const SizedBox(height: 22),
-            _ActionButton(icon: liked ? Icons.favorite : Icons.favorite_border, label: liked ? 'أعجبني' : widget.video.likes, color: liked ? Colors.pinkAccent : Colors.white, onTap: () => setState(() => liked = !liked)),
+            _ActionButton(icon: liked ? Icons.favorite : Icons.favorite_border, label: '$likeCount', color: liked ? Colors.pinkAccent : Colors.white, onTap: _toggleLike),
             const SizedBox(height: 20),
-            _ActionButton(icon: Icons.mode_comment_outlined, label: 'تعليق', onTap: showComments),
+            _ActionButton(icon: Icons.mode_comment_outlined, label: '$commentCount', onTap: showComments),
             const SizedBox(height: 20),
             _ActionButton(icon: saved ? Icons.bookmark : Icons.bookmark_border, label: saved ? 'محفوظ' : 'حفظ', color: saved ? accent : Colors.white, onTap: () => setState(() => saved = !saved)),
             const SizedBox(height: 20),
@@ -539,7 +688,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
               Text(widget.video.user, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               const SizedBox(width: 10),
               OutlinedButton(
-                onPressed: () => setState(() => following = !following),
+                onPressed: _toggleFollow,
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white70), padding: const EdgeInsets.symmetric(horizontal: 12), minimumSize: const Size(0, 30)),
                 child: Text(following ? 'تتابعه' : 'متابعة'),
               ),
