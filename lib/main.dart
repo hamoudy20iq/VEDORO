@@ -345,6 +345,7 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> {
   int current = 0;
+  bool _followingOnly = false;
   late Future<List<DemoVideo>> _videos;
 
   @override
@@ -353,7 +354,7 @@ class _FeedScreenState extends State<FeedScreen> {
     _videos = _loadVideos();
   }
 
-  Future<List<DemoVideo>> _loadVideos() async {
+  Future<List<DemoVideo>> _loadVideos({bool? followingOnly}) async {
     final client = Supabase.instance.client;
     final user = client.auth.currentUser;
     if (user == null) return [];
@@ -374,7 +375,14 @@ class _FeedScreenState extends State<FeedScreen> {
       final blocked = block['blocked_id'].toString();
       blockedIds.add(blocker == user.id ? blocked : blocker);
     }
-    final visibleRows = rows.where((row) => !blockedIds.contains(row['author_id'].toString())).toList();
+    var visibleRows = rows.where((row) => !blockedIds.contains(row['author_id'].toString())).toList();
+    if (visibleRows.isEmpty) return [];
+    final followRows = await client.from('follows')
+        .select('followed_id').eq('follower_id', user.id);
+    final followedUsers = followRows.map((x) => x['followed_id'] as String).toSet();
+    if (followingOnly ?? _followingOnly) {
+      visibleRows = visibleRows.where((row) => followedUsers.contains(row['author_id'].toString())).toList();
+    }
     if (visibleRows.isEmpty) return [];
 
     final postIds = visibleRows.map((row) => row['id'] as String).toList();
@@ -391,12 +399,9 @@ class _FeedScreenState extends State<FeedScreen> {
         .select('post_id, user_id').inFilter('post_id', postIds);
     final commentRows = await client.from('comments')
         .select('post_id').inFilter('post_id', postIds);
-    final followRows = await client.from('follows')
-        .select('followed_id').eq('follower_id', user.id).inFilter('followed_id', authorIds);
     final likeCounts = <String, int>{};
     final commentCounts = <String, int>{};
     final likedPosts = <String>{};
-    final followedUsers = followRows.map((x) => x['followed_id'] as String).toSet();
     for (final item in likeRows) {
       final id = item['post_id'] as String;
       likeCounts[id] = (likeCounts[id] ?? 0) + 1;
@@ -461,6 +466,42 @@ class _FeedScreenState extends State<FeedScreen> {
     return result;
   }
 
+  Widget _feedModeTabs() => Container(
+    padding: const EdgeInsets.all(4),
+    decoration: BoxDecoration(color: Colors.black.withValues(alpha: .38), borderRadius: BorderRadius.circular(24)),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      _feedModeButton('لك', false),
+      const SizedBox(width: 4),
+      _feedModeButton('متابَعون', true),
+    ]),
+  );
+
+  Widget _feedModeButton(String label, bool following) {
+    final selected = _followingOnly == following;
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: selected ? null : () {
+        setState(() {
+          _followingOnly = following;
+          current = 0;
+          _videos = _loadVideos(followingOnly: following);
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(label, style: TextStyle(
+          color: selected ? Colors.white : Colors.white70,
+          fontSize: 14, fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+        )),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<List<DemoVideo>>(
     future: _videos,
@@ -476,16 +517,32 @@ class _FeedScreenState extends State<FeedScreen> {
       }
       final videos = snapshot.data ?? [];
       if (videos.isEmpty) {
-        return const Center(child: Padding(
-          padding: EdgeInsets.all(28),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.video_library_outlined, size: 66, color: accent),
-            SizedBox(height: 14),
-            Text('ماكو فيديوهات منشورة بعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            SizedBox(height: 8),
-            Text('انشر أول فيديو إلك، وبعد الموافقة راح يظهر هنا للجميع.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white60)),
-          ]),
-        ));
+        return Column(children: [
+          _feedModeTabs(),
+          const Spacer(),
+          Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.video_library_outlined, size: 66, color: accent),
+              const SizedBox(height: 14),
+              Text(_followingOnly ? 'ماكو فيديوهات من الحسابات اللي تتابعها' : 'ماكو فيديوهات منشورة بعد',
+                textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              const Text('اسحب للأسفل للتحديث أو اكتشف حسابات جديدة.',
+                textAlign: TextAlign.center, style: TextStyle(color: Colors.white60)),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () => setState(() {
+                  _followingOnly = false;
+                  _videos = _loadVideos(followingOnly: false);
+                }),
+                icon: const Icon(Icons.explore_outlined),
+                label: const Text('العودة إلى لك'),
+              ),
+            ]),
+          ),
+          const Spacer(),
+        ]);
       }
       return RefreshIndicator(
         color: accent,
@@ -510,16 +567,10 @@ class _FeedScreenState extends State<FeedScreen> {
               key: ValueKey(videos[index].url), video: videos[index], active: current == index,
             )),
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Text('لك', style: TextStyle(color: Colors.white.withValues(alpha: .72), fontSize: 16)),
-                const SizedBox(width: 22),
-                const Text('متابَعون', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-              ]),
-            ),
-          ),
+          SafeArea(child: Align(
+            alignment: Alignment.topCenter,
+            child: Padding(padding: const EdgeInsets.only(top: 7), child: _feedModeTabs()),
+          )),
         ]),
       );
     },
