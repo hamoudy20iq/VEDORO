@@ -174,6 +174,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   bool showControls = false;
   bool failed = false;
   bool muted = false;
+  bool saved = false;
   final List<String> comments = [];
 
   @override
@@ -283,6 +284,8 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
             _ActionButton(icon: liked ? Icons.favorite : Icons.favorite_border, label: liked ? 'أعجبني' : widget.video.likes, color: liked ? Colors.pinkAccent : Colors.white, onTap: () => setState(() => liked = !liked)),
             const SizedBox(height: 20),
             _ActionButton(icon: Icons.mode_comment_outlined, label: 'تعليق', onTap: showComments),
+            const SizedBox(height: 20),
+            _ActionButton(icon: saved ? Icons.bookmark : Icons.bookmark_border, label: saved ? 'محفوظ' : 'حفظ', color: saved ? accent : Colors.white, onTap: () => setState(() => saved = !saved)),
             const SizedBox(height: 20),
             _ActionButton(icon: Icons.share_outlined, label: 'مشاركة', onTap: () async { await Clipboard.setData(ClipboardData(text: widget.video.url)); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ رابط الفيديو'))); }),
             const SizedBox(height: 20),
