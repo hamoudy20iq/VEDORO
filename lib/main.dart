@@ -461,7 +461,8 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   bool muted = false;
   bool saved = false;
   bool savingBusy = false;
-  final List<String> comments = [];
+  final List<Map<String, dynamic>> comments = [];
+  Map<String, dynamic>? _replyTo;
   bool commentsLoading = false;
   bool actionBusy = false;
 
@@ -584,14 +585,28 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     refreshSheet(() => commentsLoading = true);
     try {
       final client = Supabase.instance.client;
-      final rows = await client.from('comments').select('body, author_id')
+      final rows = await client.from('comments').select('id, body, author_id, parent_comment_id, created_at')
           .eq('post_id', postId).order('created_at', ascending: true).limit(100);
       final authorIds = rows.map((row) => row['author_id'].toString()).toSet().toList();
+      final commentIds = rows.map((row) => row['id'].toString()).toList();
       final profiles = authorIds.isEmpty ? [] : await client.from('profiles')
           .select('id, username, avatar_path').inFilter('id', authorIds);
       final byId = {for (final p in profiles) p['id'].toString(): p};
-      comments..clear()..addAll(rows.map((row) =>
-        '${byId[row['author_id'].toString()]?['username'] ?? 'user'}| ${row['body']}'));
+      final likes = commentIds.isEmpty ? [] : await client.from('comment_likes').select('comment_id, user_id').inFilter('comment_id', commentIds);
+      final counts = <String, int>{};
+      final mine = <String>{};
+      for (final like in likes) {
+        final id = like['comment_id'].toString();
+        counts[id] = (counts[id] ?? 0) + 1;
+        if (like['user_id'] == client.auth.currentUser!.id) mine.add(id);
+      }
+      comments..clear()..addAll(rows.map((row) {
+        final id = row['id'].toString();
+        return <String, dynamic>{...Map<String, dynamic>.from(row),
+          'username': byId[row['author_id'].toString()]?['username'] ?? 'user',
+          'avatar_path': byId[row['author_id'].toString()]?['avatar_path'],
+          'like_count': counts[id] ?? 0, 'is_liked': mine.contains(id)};
+      }));
     } catch (e) {
       if (mounted) _showActionError('تعذر تحميل التعليقات: $e');
     } finally {
@@ -606,12 +621,29 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     try {
       await Supabase.instance.client.from('comments').insert({
         'post_id': postId, 'author_id': user.id, 'body': value.trim(),
+        if (_replyTo != null) 'parent_comment_id': _replyTo!['id'],
       });
-      comments.add(value.trim());
+      _replyTo = null;
+      await _loadComments(refreshSheet);
       if (mounted) setState(() => commentCount++);
       refreshSheet(() {});
     } catch (e) {
       if (mounted) _showActionError('تعذر إرسال التعليق: $e');
+    }
+  }
+  Future<void> _toggleCommentLike(Map<String, dynamic> comment, StateSetter refreshSheet) async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser?.id;
+    if (uid == null) return;
+    final id = comment['id'].toString();
+    final wasLiked = comment['is_liked'] == true;
+    refreshSheet(() { comment['is_liked'] = !wasLiked; comment['like_count'] = (comment['like_count'] as int? ?? 0) + (wasLiked ? -1 : 1); });
+    try {
+      if (wasLiked) { await client.from('comment_likes').delete().eq('comment_id', id).eq('user_id', uid); }
+      else { await client.from('comment_likes').insert({'comment_id': id, 'user_id': uid}); }
+    } catch (e) {
+      refreshSheet(() { comment['is_liked'] = wasLiked; comment['like_count'] = (comment['like_count'] as int? ?? 0) + (wasLiked ? 1 : -1); });
+      if (mounted) _showActionError('تعذر تسجيل الإعجاب: $e');
     }
   }
 
