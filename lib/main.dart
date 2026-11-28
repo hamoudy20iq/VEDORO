@@ -1,8 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'auth_gate.dart';
 
-void main() => runApp(const VedoroApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: 'https://ybgclxavkdakegfpxgqh.supabase.co',
+    publishableKey: 'sb_publishable_7zS8HOMf7qQaT0U_MYvcfw_IKA-lQIb',
+  );
+  runApp(const VedoroApp());
+}
 
 const accent = Color(0xFF9B6DFF);
 const background = Color(0xFF08080D);
@@ -20,7 +29,7 @@ class VedoroApp extends StatelessWidget {
       colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark),
       useMaterial3: true,
     ),
-    home: const MainScreen(),
+    home: const AuthGate(),
   );
 }
 
