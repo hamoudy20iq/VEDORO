@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_gate.dart';
 
@@ -208,26 +207,8 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
     };
     final path = '${user.id}/${DateTime.now().microsecondsSinceEpoch}.$extension';
     var uploaded = false;
-    var thumbnailUploaded = false;
-    String? thumbnailPath;
 
     try {
-      final generatedThumbnail = await VideoThumbnail.thumbnailFile(
-        video: selected.path,
-        thumbnailPath: Directory.systemTemp.path,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: 480,
-        quality: 65,
-      );
-      if (generatedThumbnail != null) {
-        thumbnailPath = '${user.id}/${DateTime.now().microsecondsSinceEpoch}_thumb.jpg';
-        await Supabase.instance.client.storage.from('vedoro-thumbnails').upload(
-          thumbnailPath!,
-          File(generatedThumbnail),
-          fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: false),
-        );
-        thumbnailUploaded = true;
-      }
       await storage.upload(
         path,
         File(selected.path),
@@ -240,7 +221,6 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
         'post_type': 'video',
         'caption': _caption.text.trim(),
         'media_path': path,
-        if (thumbnailPath != null) 'thumbnail_path': thumbnailPath,
         'visibility': 'public',
         'moderation_status': 'approved',
       });
@@ -251,9 +231,6 @@ class _CreateVideoSheetState extends State<CreateVideoSheet> {
     } catch (e) {
       if (uploaded) {
         try { await storage.remove([path]); } catch (_) {}
-      }
-      if (thumbnailUploaded && thumbnailPath != null) {
-        try { await Supabase.instance.client.storage.from('vedoro-thumbnails').remove([thumbnailPath]); } catch (_) {}
       }
       _showError('فشل رفع الفيديو: $e');
     } finally {
