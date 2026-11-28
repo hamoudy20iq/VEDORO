@@ -83,7 +83,7 @@ class _MainScreenState extends State<MainScreen> {
   int feedRefresh = 0;
 
   void openTab(int index) {
-    if (index == 2) {
+    if (index == 3) {
       _showCreateNotice();
       return;
     }
@@ -117,6 +117,7 @@ class _MainScreenState extends State<MainScreen> {
     final pages = [
       FeedScreen(key: ValueKey(feedRefresh), onPageChanged: (i) => activeVideo = i),
       const ExplorePage(),
+      const NotificationsPage(),
       const SizedBox.shrink(),
       const MessagesPage(),
       const ProfilePage(),
@@ -124,19 +125,65 @@ class _MainScreenState extends State<MainScreen> {
     return Scaffold(
       body: IndexedStack(index: tab, children: pages),
       bottomNavigationBar: NavigationBar(
-        height: 66,
+        height: 68,
         backgroundColor: const Color(0xFF111118),
         indicatorColor: accent.withValues(alpha: .18),
         selectedIndex: tab,
         onDestinationSelected: openTab,
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'الرئيسية'),
-          NavigationDestination(icon: Icon(Icons.explore_outlined), selectedIcon: Icon(Icons.explore), label: 'اكتشف'),
-          NavigationDestination(icon: Icon(Icons.add_box_outlined), selectedIcon: Icon(Icons.add_box), label: 'نشر'),
-          NavigationDestination(icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'الرسائل'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'حسابي'),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'الرئيسية'),
+          const NavigationDestination(icon: Icon(Icons.explore_outlined), selectedIcon: Icon(Icons.explore), label: 'اكتشف'),
+          NavigationDestination(
+            icon: const NotificationBellIcon(),
+            selectedIcon: const NotificationBellIcon(selected: true),
+            label: 'الإشعارات',
+          ),
+          const NavigationDestination(icon: Icon(Icons.add_box_outlined), selectedIcon: Icon(Icons.add_box), label: 'نشر'),
+          const NavigationDestination(icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'الرسائل'),
+          const NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'حسابي'),
         ],
       ),
+    );
+  }
+}
+
+class NotificationBellIcon extends StatelessWidget {
+  const NotificationBellIcon({super.key, this.selected = false});
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return Icon(selected ? Icons.notifications_active_rounded : Icons.notifications_none_rounded);
+    final stream = Supabase.instance.client.from('notifications')
+      .stream(primaryKey: ['id']).eq('recipient_id', uid);
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: stream,
+      builder: (context, snapshot) {
+        final unread = (snapshot.data ?? []).where((row) => row['is_read'] != true).length;
+        return SizedBox(
+          width: 42, height: 38,
+          child: Stack(clipBehavior: Clip.none, alignment: Alignment.center, children: [
+            Icon(selected ? Icons.notifications_active_rounded : Icons.notifications_none_rounded, size: 25),
+            if (unread > 0)
+              Positioned(
+                top: -2, right: -3,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 17, minHeight: 17),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE53945),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF111118), width: 1.5),
+                  ),
+                  child: Text(unread > 99 ? '99+' : '$unread',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800)),
+                ),
+              ),
+          ]),
+        );
+      },
     );
   }
 }
@@ -1045,31 +1092,60 @@ class _StoryTrayState extends State<StoryTray> {
     if (_uploading) return;
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery, imageQuality: 88, maxWidth: 1600,
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF191922),
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Padding(padding: EdgeInsets.all(12), child: Text('إنشاء قصة جديدة', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+        ListTile(leading: const Icon(Icons.image_outlined, color: accent), title: const Text('نشر صورة'), onTap: () => Navigator.pop(ctx, 'image')),
+        ListTile(leading: const Icon(Icons.video_library_outlined, color: accent), title: const Text('نشر فيديو قصير'), onTap: () => Navigator.pop(ctx, 'video')),
+        const SizedBox(height: 8),
+      ])),
     );
+    if (choice == null || !mounted) return;
+
+    XFile? picked;
+    try {
+      if (choice == 'image') {
+        picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 88, maxWidth: 1600);
+      } else {
+        picked = await ImagePicker().pickVideo(source: ImageSource.gallery, maxDuration: const Duration(seconds: 30));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر اختيار الملف: $e')));
+      return;
+    }
     if (picked == null || !mounted) return;
     final file = File(picked.path);
     final size = await file.length();
-    if (size > 10 * 1024 * 1024) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('حجم صورة القصة يجب ألا يتجاوز 10 ميغابايت')),
-      );
+    if (size > 25 * 1024 * 1024) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حجم القصة يجب ألا يتجاوز 25 ميغابايت')));
       return;
     }
     final ext = picked.path.split('.').last.toLowerCase();
-    final mime = switch (ext) {
-      'png' => 'image/png',
-      'webp' => 'image/webp',
-      'jpg' || 'jpeg' => 'image/jpeg',
-      _ => '',
-    };
+    final mime = choice == 'image'
+      ? switch (ext) { 'png' => 'image/png', 'webp' => 'image/webp', 'jpg' || 'jpeg' => 'image/jpeg', _ => '' }
+      : switch (ext) { 'mov' => 'video/quicktime', 'mp4' => 'video/mp4', _ => '' };
     if (mime.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الصيغ المدعومة: JPG وPNG وWEBP')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الصيغ المدعومة: JPG/PNG/WEBP للصور وMP4/MOV للفيديو')));
       return;
     }
+    final captionController = TextEditingController();
+    final caption = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('أضف وصفاً للقصة (اختياري)'),
+        content: TextField(controller: captionController, maxLength: 180, maxLines: 2, decoration: const InputDecoration(hintText: 'اكتب شيئاً...')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, captionController.text.trim()), child: const Text('متابعة')),
+        ],
+      ),
+    );
+    captionController.dispose();
+    if (caption == null || !mounted) return;
+
     setState(() => _uploading = true);
     final path = '${user.id}/${DateTime.now().microsecondsSinceEpoch}.$ext';
     var uploaded = false;
@@ -1082,23 +1158,21 @@ class _StoryTrayState extends State<StoryTray> {
       await client.from('stories').insert({
         'user_id': user.id,
         'media_path': path,
-        'media_type': 'image',
-        'caption': '',
+        'media_type': choice,
+        'caption': caption,
         'expires_at': DateTime.now().toUtc().add(const Duration(hours: 24)).toIso8601String(),
       });
       if (mounted) {
         setState(() => _stories = _loadStories());
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('نُشرت قصتك لمدة 24 ساعة 💜')),
+          SnackBar(content: Text(choice == 'image' ? 'نُشرت صورتك كقصة لمدة 24 ساعة 💜' : 'نُشر فيديو القصة لمدة 24 ساعة 💜')),
         );
       }
     } catch (e) {
       if (uploaded) {
         try { await Supabase.instance.client.storage.from('vedoro-stories').remove([path]); } catch (_) {}
       }
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر نشر القصة: $e')),
-      );
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر نشر القصة: $e')));
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -1168,6 +1242,49 @@ class _StoryTrayState extends State<StoryTray> {
       },
     ),
   );
+}
+
+class StoryVideoPlayer extends StatefulWidget {
+  const StoryVideoPlayer({super.key, required this.url});
+  final String url;
+  @override
+  State<StoryVideoPlayer> createState() => _StoryVideoPlayerState();
+}
+
+class _StoryVideoPlayerState extends State<StoryVideoPlayer> {
+  late final VideoPlayerController _controller;
+  bool _ready = false;
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
+      ..initialize().then((_) {
+        if (!mounted) return;
+        _controller.setLooping(false);
+        _controller.play();
+        setState(() => _ready = true);
+      }).catchError((_) {});
+  }
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) return const Center(child: CircularProgressIndicator(color: accent));
+    return Center(child: AspectRatio(
+      aspectRatio: _controller.value.aspectRatio,
+      child: Stack(alignment: Alignment.bottomCenter, children: [
+        VideoPlayer(_controller),
+        VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: accent, bufferedColor: Colors.white38, backgroundColor: Colors.white24)),
+        Align(alignment: Alignment.center, child: IconButton.filledTonal(
+          onPressed: () => setState(() => _controller.value.isPlaying ? _controller.pause() : _controller.play()),
+          icon: Icon(_controller.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded),
+        )),
+      ]),
+    ));
+  }
 }
 
 class StoryViewerPage extends StatefulWidget {
@@ -1373,7 +1490,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: accent));
           return Stack(fit: StackFit.expand, children: [
             GestureDetector(onTap: _next,
-              child: InteractiveViewer(child: Center(child: Image.network(snapshot.data!, fit: BoxFit.contain)))),
+              child: story['media_type'] == 'video' ? StoryVideoPlayer(url: snapshot.data!) : InteractiveViewer(child: Center(child: Image.network(snapshot.data!, fit: BoxFit.contain)))),
             Positioned(top: 12, left: 16, right: 16,
               child: LinearProgressIndicator(value: (_index + 1) / widget.stories.length,
                 backgroundColor: Colors.white24, color: accent)),
