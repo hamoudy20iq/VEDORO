@@ -986,6 +986,90 @@ class StoryViewerPage extends StatefulWidget {
 class _StoryViewerPageState extends State<StoryViewerPage> {
   int _index = 0;
   late Future<String> _url;
+  final _reply = TextEditingController();
+  bool _reacting = false;
+  bool _replying = false;
+  static const _reactions = ['❤️','😂','😮','🔥','👏','😍'];
+
+  @override
+  void dispose() {
+    _reply.dispose();
+    super.dispose();
+  }
+
+  Future<void> _react(String emoji) async {
+    if (_reacting) return;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    setState(() => _reacting = true);
+    try {
+      await Supabase.instance.client.from('story_reactions').upsert({
+        'story_id': widget.stories[_index]['id'],
+        'user_id': user.id,
+        'reaction': emoji,
+      }, onConflict: 'story_id,user_id');
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('أرسلت تفاعلك $emoji')),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر إرسال التفاعل: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _reacting = false);
+    }
+  }
+
+  Future<void> _replyToStory() async {
+    final body = _reply.text.trim();
+    if (body.isEmpty || _replying) return;
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    final storyOwner = widget.stories[_index]['user_id'].toString();
+    if (user == null || storyOwner == user.id) return;
+    setState(() => _replying = true);
+    try {
+      final mine = await client.from('conversation_members')
+        .select('conversation_id').eq('user_id', user.id);
+      final myIds = mine.map((x) => x['conversation_id'].toString()).toList();
+      String? conversationId;
+      if (myIds.isNotEmpty) {
+        final theirs = await client.from('conversation_members')
+          .select('conversation_id').eq('user_id', storyOwner).inFilter('conversation_id', myIds);
+        if (theirs.isNotEmpty) conversationId = theirs.first['conversation_id'].toString();
+      }
+      if (conversationId == null) {
+        final conversation = await client.from('conversations')
+          .insert({'created_by': user.id, 'is_group': false})
+          .select('id').single();
+        conversationId = conversation['id'].toString();
+        await client.from('conversation_members').insert([
+          {'conversation_id': conversationId, 'user_id': user.id},
+          {'conversation_id': conversationId, 'user_id': storyOwner},
+        ]);
+      }
+      await client.from('messages').insert({
+        'conversation_id': conversationId,
+        'sender_id': user.id,
+        'body': 'رد على القصة: $body',
+      });
+      _reply.clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تم إرسال الرد إلى الرسائل الخاصة 💬')),
+        );
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => ChatPage(conversationId: conversationId!, title: 'محادثة VEDORO'),
+        ));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر إرسال الرد: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _replying = false);
+    }
+  }
 
   @override
   void initState() {
@@ -1017,25 +1101,49 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
           Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(fontSize: 14)),
         ]),
       ),
-      body: GestureDetector(
-        onTap: _next,
-        child: FutureBuilder<String>(
-          future: _url,
-          builder: (context, snapshot) {
-            if (snapshot.hasError) return const Center(child: Text('تعذر تحميل القصة'));
-            if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: accent));
-            return Stack(fit: StackFit.expand, children: [
-              InteractiveViewer(child: Center(child: Image.network(snapshot.data!, fit: BoxFit.contain))),
-              Positioned(top: 12, left: 16, right: 16,
-                child: LinearProgressIndicator(value: (_index + 1) / widget.stories.length,
-                  backgroundColor: Colors.white24, color: accent)),
-              if ((story['caption'] ?? '').toString().isNotEmpty)
-                Positioned(bottom: 35, left: 20, right: 20,
-                  child: Text(story['caption'].toString(), textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
-            ]);
-          },
-        ),
+      body: FutureBuilder<String>(
+        future: _url,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return const Center(child: Text('تعذر تحميل القصة'));
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: accent));
+          return Stack(fit: StackFit.expand, children: [
+            GestureDetector(onTap: _next,
+              child: InteractiveViewer(child: Center(child: Image.network(snapshot.data!, fit: BoxFit.contain)))),
+            Positioned(top: 12, left: 16, right: 16,
+              child: LinearProgressIndicator(value: (_index + 1) / widget.stories.length,
+                backgroundColor: Colors.white24, color: accent)),
+            if ((story['caption'] ?? '').toString().isNotEmpty)
+              Positioned(bottom: 112, left: 20, right: 20,
+                child: IgnorePointer(child: Text(story['caption'].toString(), textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)))),
+            Positioned(left: 12, right: 12, bottom: 18,
+              child: Column(children: [
+                Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: _reactions.map((emoji) => IconButton(
+                    onPressed: _reacting ? null : () => _react(emoji),
+                    icon: Text(emoji, style: const TextStyle(fontSize: 27)),
+                  )).toList()),
+                Row(children: [
+                  Expanded(child: TextField(controller: _reply,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _replyToStory(),
+                    decoration: InputDecoration(
+                      hintText: 'رد على القصة برسالة...',
+                      filled: true, fillColor: Colors.black87,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide(color: Colors.white24)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    ))),
+                  const SizedBox(width: 6),
+                  IconButton(onPressed: _replying ? null : _replyToStory,
+                    icon: _replying
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.send, color: accent)),
+                ]),
+              ]),
+            ),
+          ]);
+        },
       ),
     );
   }
