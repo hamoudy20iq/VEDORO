@@ -1470,9 +1470,18 @@ class _ChatPageState extends State<ChatPage> {
   void dispose() { _input.dispose(); super.dispose(); }
   Future<List<Map<String, dynamic>>> _load() async {
     final client = Supabase.instance.client;
-    final rows = await client.from('messages').select('id, sender_id, body, created_at')
+    final rows = await client.from('messages').select('id, sender_id, body, created_at, read_at')
       .eq('conversation_id', widget.conversationId).order('created_at');
     final messages = List<Map<String, dynamic>>.from(rows);
+    final unreadIds = messages.where((m) => m['sender_id'] != client.auth.currentUser!.id && m['read_at'] == null)
+      .map((m) => m['id'].toString()).toList();
+    if (unreadIds.isNotEmpty) {
+      final readAt = DateTime.now().toUtc().toIso8601String();
+      await client.from('messages').update({'read_at': readAt}).inFilter('id', unreadIds);
+      for (final message in messages) {
+        if (unreadIds.contains(message['id'].toString())) message['read_at'] = readAt;
+      }
+    }
     final ids = messages.map((m) => m['sender_id'].toString()).toSet().toList();
     if (ids.isNotEmpty) {
       final profiles = await client.from('profiles').select('id, username, avatar_path').inFilter('id', ids);
@@ -1481,6 +1490,36 @@ class _ChatPageState extends State<ChatPage> {
     }
     return messages;
   }
+  Future<void> _blockUser() async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final members = await client.from('conversation_members')
+        .select('user_id').eq('conversation_id', widget.conversationId);
+      final other = members.map((m) => m['user_id'].toString()).firstWhere((id) => id != uid, orElse: () => '');
+      if (other.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ما لقينا الطرف الآخر بالمحادثة')));
+        return;
+      }
+      final confirmed = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+        title: const Text('حظر هذا الحساب؟'),
+        content: const Text('بعد الحظر لن يتمكن هذا الحساب من إرسال رسائل إليك، ولن تتمكن أنت أيضاً من مراسلته.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حظر')),
+        ],
+      ));
+      if (confirmed != true || !mounted) return;
+      await client.from('user_blocks').insert({'blocker_id': uid, 'blocked_id': other});
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم حظر الحساب')));
+      Navigator.pop(context);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر حظر الحساب: $e')));
+    }
+  }
+
   Future<void> _send() async {
     final body = _input.text.trim();
     final user = Supabase.instance.client.auth.currentUser;
@@ -1500,7 +1539,13 @@ class _ChatPageState extends State<ChatPage> {
   Widget build(BuildContext context) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(tooltip: 'تحديث المحادثة', onPressed: () => setState(() => _messages = _load()), icon: const Icon(Icons.refresh)),
+          IconButton(tooltip: 'حظر الحساب', onPressed: _blockUser, icon: const Icon(Icons.block, color: Colors.redAccent)),
+        ],
+      ),
       body: Column(children: [
         Expanded(child: FutureBuilder<List<Map<String, dynamic>>>(
           future: _messages,
@@ -1521,6 +1566,13 @@ class _ChatPageState extends State<ChatPage> {
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         if (!mine) Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
                         Text(rows[i]['body'].toString()),
+                        if (mine) Padding(
+                          padding: const EdgeInsets.only(top: 5),
+                          child: Text(
+                            rows[i]['read_at'] == null ? 'تم الإرسال' : 'تمت القراءة',
+                            style: TextStyle(fontSize: 10, color: rows[i]['read_at'] == null ? Colors.white54 : const Color(0xFFBFA4FF)),
+                          ),
+                        ),
                       ]))),
                     if (mine) ...[const SizedBox(width: 7), VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 15)],
                   ]));
