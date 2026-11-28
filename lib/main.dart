@@ -731,18 +731,53 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
                   : comments.isEmpty
                     ? const Center(child: Text('كن أول من يعلّق على هذا الفيديو', style: TextStyle(color: Colors.white54)))
                     : ListView.builder(itemCount: comments.length, itemBuilder: (_, i) {
-                      final parts = comments[i].split('| ');
-                      return ListTile(leading: const VedoroAvatar(radius: 19),
-                        title: Text('@${parts.first}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
-                        subtitle: Text(parts.length > 1 ? parts.sublist(1).join('| ') : comments[i]));
+                      final item = comments[i];
+                      final reply = item['parent_comment_id'] != null;
+                      return Padding(
+                        padding: EdgeInsets.only(left: reply ? 32 : 0),
+                        child: ListTile(
+                          dense: true,
+                          leading: VedoroAvatar(path: item['avatar_path']?.toString(), radius: 19),
+                          title: Text('@${item['username']}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                          subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            if (reply) const Text('رد على تعليق', style: TextStyle(color: accent, fontSize: 10)),
+                            Text(item['body'].toString()),
+                            Row(children: [
+                              TextButton.icon(
+                                onPressed: () {
+                                  refreshSheet(() => _replyTo = item);
+                                  input.text = '@${item['username']} ';
+                                  input.selection = TextSelection.collapsed(offset: input.text.length);
+                                },
+                                icon: const Icon(Icons.reply, size: 16), label: const Text('رد'),
+                              ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => _toggleCommentLike(item, refreshSheet),
+                                icon: Icon(item['is_liked'] == true ? Icons.favorite : Icons.favorite_border,
+                                  color: item['is_liked'] == true ? Colors.pinkAccent : Colors.white60, size: 18),
+                              ),
+                              Text('${item['like_count']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                            ]),
+                          ]),
+                        ),
+                      );
                     })),
+                if (_replyTo != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(children: [
+                      Expanded(child: Text('الرد على @${_replyTo!['username']}', style: const TextStyle(color: accent, fontSize: 12))),
+                      IconButton(onPressed: () => refreshSheet(() => _replyTo = null), icon: const Icon(Icons.close, size: 18)),
+                    ]),
+                  ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
                   child: Row(children: [
                     Expanded(child: TextField(controller: input, textInputAction: TextInputAction.send, onSubmitted: (_) async {
                       final value = input.text.trim();
                       if (value.isNotEmpty) { input.clear(); await _sendComment(value, refreshSheet); }
-                    }, decoration: InputDecoration(hintText: 'اكتب تعليقاً...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
+                    }, decoration: InputDecoration(hintText: 'اكتب تعليقاً أو @اسم المستخدم...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
                     IconButton(onPressed: () async {
                       final value = input.text.trim();
                       if (value.isNotEmpty) { input.clear(); await _sendComment(value, refreshSheet); }
