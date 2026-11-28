@@ -488,6 +488,8 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   Timer? _viewTimer;
   String? _viewRecordId;
   int _watchedMs = 0;
+  bool _savingView = false;
+  double playbackSpeed = 1.0;
 
   @override
   void initState() {
@@ -541,7 +543,8 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   Future<void> _saveViewProgress() async {
     final postId = widget.video.postId;
     final user = Supabase.instance.client.auth.currentUser;
-    if (postId == null || user == null || _watchedMs <= 0) return;
+    if (postId == null || user == null || _watchedMs <= 0 || _savingView) return;
+    _savingView = true;
     try {
       final duration = controller?.value.duration.inMilliseconds ?? 0;
       final completed = duration > 0 && _watchedMs >= duration * 0.9;
@@ -561,7 +564,36 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
           'completed': completed,
         }).eq('id', _viewRecordId!).eq('viewer_id', user.id);
       }
-    } catch (_) {}
+    } catch (_) {
+      // A later timer tick or disposal retries the latest progress.
+    } finally {
+      _savingView = false;
+    }
+  }
+
+  Future<void> _showPlaybackSpeed() async {
+    const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+    final selected = await showModalBottomSheet<double>(
+      context: context,
+      backgroundColor: const Color(0xFF171720),
+      builder: (ctx) => SafeArea(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('سرعة تشغيل الفيديو', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          ),
+          ...speeds.map((speed) => ListTile(
+            title: Text('${speed}x', textAlign: TextAlign.center),
+            trailing: playbackSpeed == speed ? const Icon(Icons.check, color: accent) : null,
+            onTap: () => Navigator.pop(ctx, speed),
+          )),
+        ],
+      )),
+    );
+    if (selected == null || !mounted || controller?.value.isInitialized != true) return;
+    await controller!.setPlaybackSpeed(selected);
+    if (mounted) setState(() => playbackSpeed = selected);
   }
 
   void togglePlayback() {
@@ -858,6 +890,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     final ready = controller?.value.isInitialized == true;
     return GestureDetector(
       onTap: togglePlayback,
+      onDoubleTap: () { if (!liked && !actionBusy) _toggleLike(); },
       child: Stack(fit: StackFit.expand, children: [
         Container(
           color: const Color(0xFF171323),
@@ -884,6 +917,8 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
             _ActionButton(icon: Icons.share_outlined, label: 'مشاركة', onTap: () async { await Clipboard.setData(ClipboardData(text: widget.video.url)); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ رابط الفيديو'))); }),
             const SizedBox(height: 20),
             _ActionButton(icon: muted ? Icons.volume_off : Icons.music_note, label: muted ? 'صامت' : 'الصوت', onTap: () async { setState(() => muted = !muted); if (controller?.value.isInitialized == true) await controller!.setVolume(muted ? 0 : 1); }),
+            const SizedBox(height: 18),
+            _ActionButton(icon: Icons.speed, label: '${playbackSpeed}x', onTap: _showPlaybackSpeed),
             const SizedBox(height: 18),
             _ActionButton(icon: Icons.flag_outlined, label: 'إبلاغ', onTap: _reportPost),
           ]),
