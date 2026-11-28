@@ -1490,7 +1490,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: accent));
           return Stack(fit: StackFit.expand, children: [
             GestureDetector(onTap: _next,
-              child: story['media_type'] == 'video' ? StoryVideoPlayer(url: snapshot.data!) : InteractiveViewer(child: Center(child: Image.network(snapshot.data!, fit: BoxFit.contain)))),
+              child: story['media_type'] == 'video' ? StoryVideoPlayer(key: ValueKey(story['id']), url: snapshot.data!) : InteractiveViewer(child: Center(child: Image.network(snapshot.data!, fit: BoxFit.contain)))),
             Positioned(top: 12, left: 16, right: 16,
               child: LinearProgressIndicator(value: (_index + 1) / widget.stories.length,
                 backgroundColor: Colors.white24, color: accent)),
@@ -2924,7 +2924,21 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('الإشعارات')),
+    appBar: AppBar(
+      title: const Text('الإشعارات'),
+      actions: [
+        TextButton.icon(
+          onPressed: () async {
+            final uid = Supabase.instance.client.auth.currentUser?.id;
+            if (uid == null) return;
+            await Supabase.instance.client.from('notifications')
+              .update({'is_read': true}).eq('recipient_id', uid).eq('is_read', false);
+          },
+          icon: const Icon(Icons.done_all, size: 18),
+          label: const Text('قراءة الكل'),
+        ),
+      ],
+    ),
     body: StreamBuilder<List<Map<String, dynamic>>>(
       stream: _notifications,
       builder: (context, snapshot) {
