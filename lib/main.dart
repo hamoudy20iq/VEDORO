@@ -787,6 +787,21 @@ class ProfilePage extends StatelessWidget {
         _ProfileStat(value: '0', label: 'يتابع'),
       ]),
       const Divider(height: 34, color: Colors.white12),
+      FutureBuilder<bool>(
+        future: Supabase.instance.client.from('app_admins').select('user_id')
+          .eq('user_id', user?.id ?? '').maybeSingle().then((row) => row != null),
+        builder: (context, snapshot) => snapshot.data == true
+          ? Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: FilledButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminReviewPage())),
+                icon: const Icon(Icons.admin_panel_settings_outlined),
+                label: const Text('مراجعة المنشورات'),
+                style: FilledButton.styleFrom(backgroundColor: accent, minimumSize: const Size.fromHeight(46)),
+              ),
+            )
+          : const SizedBox.shrink(),
+      ),
       const Expanded(child: Center(child: Text('ملفك الشخصي على VEDORO. ستظهر فيديوهاتك وإحصاءاتك هنا.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)))),
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
@@ -802,6 +817,106 @@ class ProfilePage extends StatelessWidget {
     ]));
   }
 }
+class AdminReviewPage extends StatefulWidget {
+  const AdminReviewPage({super.key});
+  @override
+  State<AdminReviewPage> createState() => _AdminReviewPageState();
+}
+
+class _AdminReviewPageState extends State<AdminReviewPage> {
+  late Future<List<Map<String, dynamic>>> _pending;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pending = _load();
+  }
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final rows = await Supabase.instance.client.from('posts')
+      .select('id, author_id, caption, media_path, created_at')
+      .eq('moderation_status', 'pending')
+      .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
+  Future<void> _review(Map<String, dynamic> post, String status) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client.from('posts')
+        .update({'moderation_status': status}).eq('id', post['id']);
+      if (status == 'rejected' && post['media_path'] != null) {
+        try {
+          await Supabase.instance.client.storage.from('vedoro-videos')
+            .remove([post['media_path'].toString()]);
+        } catch (_) {}
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(status == 'approved' ? 'تمت الموافقة ونشر الفيديو 💜' : 'تم رفض الفيديو')),
+      );
+      setState(() => _pending = _load());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تنفيذ المراجعة: $e'), backgroundColor: Colors.red.shade700),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('مراجعة المنشورات')),
+    body: FutureBuilder<List<Map<String, dynamic>>>(
+      future: _pending,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: accent));
+        }
+        if (snapshot.hasError) return Center(child: Text('تعذر تحميل الطلبات: ${snapshot.error}'));
+        final posts = snapshot.data ?? [];
+        if (posts.isEmpty) return const Center(child: Text('ماكو فيديوهات بانتظار المراجعة حالياً'));
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: posts.length,
+          itemBuilder: (context, index) {
+            final post = posts[index];
+            return Card(
+              color: const Color(0xFF171720),
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Text((post['caption'] ?? '').toString().isEmpty ? 'فيديو بدون وصف' : post['caption'].toString(),
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text('صاحب المنشور: ${post['author_id']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(child: FilledButton(
+                      onPressed: _busy ? null : () => _review(post, 'approved'),
+                      style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
+                      child: const Text('موافقة ونشر'),
+                    )),
+                    const SizedBox(width: 10),
+                    Expanded(child: OutlinedButton(
+                      onPressed: _busy ? null : () => _review(post, 'rejected'),
+                      child: const Text('رفض'),
+                    )),
+                  ]),
+                ]),
+              ),
+            );
+          },
+        );
+      },
+    ),
+  );
+}
+
 class _ProfileStat extends StatelessWidget {
   const _ProfileStat({required this.value, required this.label});
   final String value;
