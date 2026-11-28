@@ -1739,7 +1739,7 @@ class _ChatPageState extends State<ChatPage> {
       );
     }
   }
-  Future<void> _showReactions(String messageId) async {
+  Future<void> _showReactions(String messageId, {required bool canDelete}) async {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF171720),
@@ -1762,14 +1762,17 @@ class _ChatPageState extends State<ChatPage> {
             title: const Text('الرد على الرسالة'),
             onTap: () {
               Navigator.pop(ctx);
-              final message = _messages is Future<List<Map<String, dynamic>>> ? null : null;
               _load().then((rows) {
-                final found = rows.where((m) => m['id'].toString() == messageId).firstOrNull;
-                if (found != null && mounted) _startReply(found);
+                for (final found in rows) {
+                  if (found['id'].toString() == messageId && mounted) {
+                    _startReply(found);
+                    break;
+                  }
+                }
               });
             },
           ),
-          ListTile(
+          if (canDelete) ListTile(
             leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
             title: const Text('حذف الرسالة'),
             onTap: () { Navigator.pop(ctx); _deleteMessage(messageId); },
@@ -1922,7 +1925,7 @@ class _ChatPageState extends State<ChatPage> {
                     crossAxisAlignment: CrossAxisAlignment.end, children: [
                     if (!mine) ...[VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 15), const SizedBox(width: 7)],
                     Flexible(child: GestureDetector(
-                      onLongPress: () => _showReactions(rows[i]['id'].toString()),
+                      onLongPress: () => _showReactions(rows[i]['id'].toString(), canDelete: mine),
                       child: Container(padding: const EdgeInsets.all(12), constraints: const BoxConstraints(maxWidth: 280),
                       decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
