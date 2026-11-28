@@ -938,19 +938,28 @@ class _StoryTrayState extends State<StoryTray> {
           Expanded(child: ListView(
             scrollDirection: Axis.horizontal,
             children: [
-              GestureDetector(
-                onTap: _uploading ? null : _addStory,
-                child: SizedBox(width: 72, child: Column(children: [
-                  Stack(alignment: Alignment.bottomRight, children: [
-                    const VedoroAvatar(radius: 25),
-                    Container(width: 20, height: 20,
-                      decoration: const BoxDecoration(color: accent, shape: BoxShape.circle),
-                      child: const Icon(Icons.add, size: 15, color: Colors.white)),
+              Builder(builder: (context) {
+                final mine = grouped[uid] ?? [];
+                return SizedBox(width: 72, child: Column(children: [
+                  GestureDetector(
+                    onTap: mine.isNotEmpty ? () => Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => StoryViewerPage(stories: mine),
+                    )).then((_) { if (mounted) setState(() => _stories = _loadStories()); }) : null,
+                    child: Stack(alignment: Alignment.bottomRight, children: [
+                      const VedoroAvatar(radius: 25),
+                      Container(width: 20, height: 20,
+                        decoration: const BoxDecoration(color: accent, shape: BoxShape.circle),
+                        child: const Icon(Icons.auto_stories, size: 13, color: Colors.white)),
+                    ]),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Flexible(child: Text(mine.isEmpty ? 'قصتك' : 'قصتك', style: const TextStyle(fontSize: 10), overflow: TextOverflow.ellipsis)),
+                    GestureDetector(onTap: _uploading ? null : _addStory,
+                      child: const Icon(Icons.add_circle, size: 17, color: accent)),
                   ]),
-                  const SizedBox(height: 5),
-                  Text(_uploading ? 'يرفع...' : 'قصتك', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
-                ])),
-              ),
+                ]));
+              }),
               ...users.where((entry) => entry.key != uid).map((entry) {
                 final first = entry.value.first;
                 final profile = first['profile'] as Map<String, dynamic>?;
@@ -1075,6 +1084,75 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   void initState() {
     super.initState();
     _setUrl();
+    _recordView();
+  }
+
+  Future<void> _recordView() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    final story = widget.stories[_index];
+    if (user == null || story['user_id'].toString() == user.id) return;
+    try {
+      await Supabase.instance.client.from('story_views').upsert({
+        'story_id': story['id'], 'viewer_id': user.id,
+      }, onConflict: 'story_id,viewer_id', ignoreDuplicates: true);
+    } catch (_) {}
+  }
+
+  Future<void> _showStoryInsights() async {
+    final storyId = widget.stories[_index]['id'];
+    try {
+      final client = Supabase.instance.client;
+      final views = await client.from('story_views')
+        .select('viewer_id, viewed_at').eq('story_id', storyId)
+        .order('viewed_at', ascending: false);
+      final reactions = await client.from('story_reactions')
+        .select('user_id, reaction, created_at').eq('story_id', storyId)
+        .order('created_at', ascending: false);
+      final ids = <String>{
+        ...views.map((x) => x['viewer_id'].toString()),
+        ...reactions.map((x) => x['user_id'].toString()),
+      }.toList();
+      final profiles = ids.isEmpty ? [] : await client.from('profiles')
+        .select('id, username, avatar_path').inFilter('id', ids);
+      final byId = {for (final p in profiles) p['id'].toString(): p};
+      if (!mounted) return;
+      showModalBottomSheet(
+        context: context, backgroundColor: const Color(0xFF171720),
+        isScrollControlled: true, showDragHandle: true,
+        builder: (ctx) => SafeArea(child: SizedBox(height: 440, child: Column(children: [
+          Padding(padding: const EdgeInsets.all(12), child: Text(
+            'مشاهدو القصة والتفاعلات • ${views.length} مشاهدة',
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
+          Expanded(child: ListView(children: [
+            const ListTile(title: Text('المشاهدات', style: TextStyle(color: accent, fontWeight: FontWeight.bold))),
+            if (views.isEmpty) const ListTile(title: Text('لا توجد مشاهدات بعد')),
+            ...views.map((v) {
+              final p = byId[v['viewer_id'].toString()];
+              return ListTile(
+                leading: VedoroAvatar(path: p?['avatar_path']?.toString(), radius: 20),
+                title: Text('@${p?['username'] ?? 'user'}'),
+                subtitle: const Text('شاهد القصة'),
+              );
+            }),
+            const Divider(color: Colors.white12),
+            const ListTile(title: Text('التفاعلات', style: TextStyle(color: accent, fontWeight: FontWeight.bold))),
+            if (reactions.isEmpty) const ListTile(title: Text('لا توجد تفاعلات بعد')),
+            ...reactions.map((r) {
+              final p = byId[r['user_id'].toString()];
+              return ListTile(
+                leading: VedoroAvatar(path: p?['avatar_path']?.toString(), radius: 20),
+                title: Text('@${p?['username'] ?? 'user'}'),
+                trailing: Text(r['reaction'].toString(), style: const TextStyle(fontSize: 25)),
+              );
+            }),
+          ])),
+        ]))),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تحميل إحصاءات القصة: $e')),
+      );
+    }
   }
 
   void _setUrl() {
@@ -1085,12 +1163,14 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   void _next() {
     if (_index + 1 >= widget.stories.length) { Navigator.pop(context); return; }
     setState(() { _index++; _setUrl(); });
+    _recordView();
   }
 
   @override
   Widget build(BuildContext context) {
     final story = widget.stories[_index];
     final profile = story['profile'] as Map<String, dynamic>?;
+    final isOwner = story['user_id'].toString() == Supabase.instance.client.auth.currentUser?.id;
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -1116,6 +1196,26 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
               Positioned(bottom: 112, left: 20, right: 20,
                 child: IgnorePointer(child: Text(story['caption'].toString(), textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)))),
+            if (isOwner)
+              Positioned(left: 16, bottom: 112, child: Material(
+                color: Colors.black.withValues(alpha: .65),
+                borderRadius: BorderRadius.circular(22),
+                child: InkWell(
+                  onTap: _showStoryInsights,
+                  borderRadius: BorderRadius.circular(22),
+                  child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                      Icon(Icons.visibility_outlined, size: 18, color: Colors.white),
+                      SizedBox(width: 6),
+                      Text('المشاهدات والتفاعلات', style: TextStyle(fontSize: 11)),
+                    ]),
+                  ),
+                ),
+              )),
+            if (isOwner)
+              Positioned(left: 12, right: 12, bottom: 18,
+                child: Center(child: Text('قصتك • اسحب/اضغط للانتقال', style: TextStyle(color: Colors.white70, fontSize: 11)))),
+            if (!isOwner)
             Positioned(left: 12, right: 12, bottom: 18,
               child: Column(children: [
                 Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly,
