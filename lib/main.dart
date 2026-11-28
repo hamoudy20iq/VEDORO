@@ -571,12 +571,15 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     if (postId == null) return;
     refreshSheet(() => commentsLoading = true);
     try {
-      final rows = await Supabase.instance.client.from('comments')
-          .select('body').eq('post_id', postId)
-          .order('created_at', ascending: true).limit(100);
-      comments
-        ..clear()
-        ..addAll(rows.map((row) => row['body'].toString()));
+      final client = Supabase.instance.client;
+      final rows = await client.from('comments').select('body, author_id')
+          .eq('post_id', postId).order('created_at', ascending: true).limit(100);
+      final authorIds = rows.map((row) => row['author_id'].toString()).toSet().toList();
+      final profiles = authorIds.isEmpty ? [] : await client.from('profiles')
+          .select('id, username, avatar_path').inFilter('id', authorIds);
+      final byId = {for (final p in profiles) p['id'].toString(): p};
+      comments..clear()..addAll(rows.map((row) =>
+        '${byId[row['author_id'].toString()]?['username'] ?? 'user'}| ${row['body']}'));
     } catch (e) {
       if (mounted) _showActionError('تعذر تحميل التعليقات: $e');
     } finally {
@@ -683,7 +686,12 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
                   ? const Center(child: CircularProgressIndicator(color: accent))
                   : comments.isEmpty
                     ? const Center(child: Text('كن أول من يعلّق على هذا الفيديو', style: TextStyle(color: Colors.white54)))
-                    : ListView.builder(itemCount: comments.length, itemBuilder: (_, i) => ListTile(leading: const CircleAvatar(child: Icon(Icons.person)), title: Text(comments[i])))),
+                    : ListView.builder(itemCount: comments.length, itemBuilder: (_, i) {
+                      final parts = comments[i].split('| ');
+                      return ListTile(leading: const VedoroAvatar(radius: 19),
+                        title: Text('@${parts.first}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                        subtitle: Text(parts.length > 1 ? parts.sublist(1).join('| ') : comments[i]));
+                    })),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
                   child: Row(children: [
@@ -796,6 +804,22 @@ class _ActionButton extends StatelessWidget {
 }
 
 
+
+class VedoroAvatar extends StatelessWidget {
+  const VedoroAvatar({super.key, this.path, this.radius = 22});
+  final String? path;
+  final double radius;
+  @override
+  Widget build(BuildContext context) {
+    final value = path?.trim();
+    final url = value == null || value.isEmpty ? null
+      : Supabase.instance.client.storage.from('vedoro-avatars').getPublicUrl(value);
+    return CircleAvatar(radius: radius, backgroundColor: accent,
+      backgroundImage: url == null ? null : NetworkImage(url),
+      child: url == null ? Icon(Icons.person, size: radius * 1.1, color: Colors.white) : null);
+  }
+}
+
 class ExplorePage extends StatefulWidget {
   const ExplorePage({super.key});
   @override
@@ -820,7 +844,7 @@ class _ExplorePageState extends State<ExplorePage> {
   Future<List<Map<String, dynamic>>> _searchUsers(String value) async {
     final client = Supabase.instance.client;
     final currentId = client.auth.currentUser?.id;
-    var request = client.from('profiles').select('id, username');
+    var request = client.from('profiles').select('id, username, avatar_path');
     if (value.trim().isNotEmpty) {
       request = request.ilike('username', '%${value.trim()}%');
     }
@@ -876,7 +900,7 @@ class _ExplorePageState extends State<ExplorePage> {
               final item = users[index];
               final username = (item['username'] ?? 'user').toString();
               return ListTile(
-                leading: const CircleAvatar(backgroundColor: accent, child: Icon(Icons.person, color: Colors.white)),
+                leading: VedoroAvatar(path: item['avatar_path']?.toString(), radius: 23),
                 title: Text('@$username', style: const TextStyle(fontWeight: FontWeight.bold)),
                 subtitle: const Text('عضو في VEDORO'),
                 trailing: const Icon(Icons.verified_user_outlined, color: Colors.white38),
@@ -931,12 +955,12 @@ class _MessagesPageState extends State<MessagesPage> {
               decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'اكتب اسم المستخدم')),
             const SizedBox(height: 8),
             SizedBox(height: 250, child: FutureBuilder<List<Map<String, dynamic>>>(
-              future: client.from('profiles').select('id, username').ilike('username', '%${query.text.trim()}%').limit(20)
+              future: client.from('profiles').select('id, username, avatar_path').ilike('username', '%${query.text.trim()}%').limit(20)
                 .then((rows) => List<Map<String, dynamic>>.from(rows).where((r) => r['id'] != client.auth.currentUser!.id).toList()),
               builder: (ctx, snap) {
                 if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accent));
                 return ListView(children: (snap.data ?? []).map((u) => ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.person)),
+                  leading: VedoroAvatar(path: u['avatar_path']?.toString(), radius: 22),
                   title: Text('@${u['username']}'),
                   onTap: () => Navigator.pop(ctx, u),
                 )).toList());
@@ -984,7 +1008,7 @@ class _MessagesPageState extends State<MessagesPage> {
           itemBuilder: (context, i) {
             final item = chats[i];
             return ListTile(
-              leading: const CircleAvatar(backgroundColor: accent, child: Icon(Icons.person, color: Colors.white)),
+              leading: const VedoroAvatar(radius: 23),
               title: const Text('محادثة VEDORO'),
               subtitle: Text(item['body'].toString(), maxLines: 1, overflow: TextOverflow.ellipsis),
               onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(
@@ -1014,9 +1038,17 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void dispose() { _input.dispose(); super.dispose(); }
   Future<List<Map<String, dynamic>>> _load() async {
-    final rows = await Supabase.instance.client.from('messages').select('id, sender_id, body, created_at')
+    final client = Supabase.instance.client;
+    final rows = await client.from('messages').select('id, sender_id, body, created_at')
       .eq('conversation_id', widget.conversationId).order('created_at');
-    return List<Map<String, dynamic>>.from(rows);
+    final messages = List<Map<String, dynamic>>.from(rows);
+    final ids = messages.map((m) => m['sender_id'].toString()).toSet().toList();
+    if (ids.isNotEmpty) {
+      final profiles = await client.from('profiles').select('id, username, avatar_path').inFilter('id', ids);
+      final byId = {for (final p in profiles) p['id'].toString(): p};
+      for (final message in messages) { message['sender_profile'] = byId[message['sender_id'].toString()]; }
+    }
+    return messages;
   }
   Future<void> _send() async {
     final body = _input.text.trim();
@@ -1048,14 +1080,19 @@ class _ChatPageState extends State<ChatPage> {
               padding: const EdgeInsets.all(14), itemCount: rows.length,
               itemBuilder: (context, i) {
                 final mine = rows[i]['sender_id'] == uid;
-                return Align(alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 5), padding: const EdgeInsets.all(12),
-                    constraints: const BoxConstraints(maxWidth: 280),
-                    decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
-                    child: Text(rows[i]['body'].toString()),
-                  ),
-                );
+                final profile = rows[i]['sender_profile'] as Map<String, dynamic>?;
+                return Padding(padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Row(mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    if (!mine) ...[VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 15), const SizedBox(width: 7)],
+                    Flexible(child: Container(padding: const EdgeInsets.all(12), constraints: const BoxConstraints(maxWidth: 280),
+                      decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        if (!mine) Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                        Text(rows[i]['body'].toString()),
+                      ]))),
+                    if (mine) ...[const SizedBox(width: 7), VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 15)],
+                  ]));
               },
             );
           },
