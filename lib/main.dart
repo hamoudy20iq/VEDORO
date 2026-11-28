@@ -2438,7 +2438,7 @@ class _ChatPageState extends State<ChatPage> {
             ),
             TextField(controller: _input, textInputAction: TextInputAction.send,
             onChanged: _handleTyping,
-            onSubmitted: (_) => _send(), decoration: InputDecoration(hintText: 'اكتب رسالة...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
+            onSubmitted: (_) => _send(), decoration: InputDecoration(hintText: 'اكتب رسالة...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none))),
           ])),
           IconButton(onPressed: _sending ? null : _send, icon: const Icon(Icons.send, color: accent)),
         ]))),
