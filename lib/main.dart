@@ -2974,7 +2974,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _settingTile({
     required IconData icon, required String title, required String subtitle,
-    required VoidCallback onTap, Color? iconColor,
+    required VoidCallback onTap, Color? iconColor, Widget? trailing,
   }) => ListTile(
     contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 2),
     leading: Container(
@@ -2984,7 +2984,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ),
     title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
     subtitle: Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 11)),
-    trailing: const Icon(Icons.chevron_left_rounded, color: Colors.white38),
+    trailing: trailing ?? const Icon(Icons.chevron_left_rounded, color: Colors.white38),
     onTap: onTap,
   );
 
@@ -3042,10 +3042,28 @@ class _SettingsPageState extends State<SettingsPage> {
             onChanged: _loading || _saving ? null : _setPrivate,
             activeColor: accent,
           ),
-          _settingTile(
-            icon: Icons.person_add_alt_1_rounded, title: 'طلبات المتابعة',
-            subtitle: 'مراجعة طلبات الأشخاص لمتابعة حسابك الخاص',
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FollowRequestsPage())),
+          StreamBuilder<List<Map<String, dynamic>>>(
+            stream: Supabase.instance.client.from('follow_requests')
+              .stream(primaryKey: ['id'])
+              .eq('target_id', user!.id)
+              .eq('status', 'pending'),
+            builder: (context, snapshot) {
+              final count = snapshot.data?.length ?? 0;
+              return _settingTile(
+                icon: Icons.person_add_alt_1_rounded, title: 'طلبات المتابعة',
+                subtitle: count == 0 ? 'مراجعة طلبات الأشخاص لمتابعة حسابك الخاص' : 'لديك $count طلب متابعة بانتظار المراجعة',
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (count > 0) Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(12)),
+                    child: Text('$count', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.chevron_left_rounded, color: Colors.white38),
+                ]),
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FollowRequestsPage())),
+              );
+            },
           ),
           _settingTile(
             icon: Icons.block_rounded, title: 'الحسابات المحظورة',
