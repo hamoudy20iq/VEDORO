@@ -1799,6 +1799,12 @@ class _ProfilePageState extends State<ProfilePage> {
               icon: const Icon(Icons.notifications_none, size: 18),
               label: const Text('الإشعارات'),
             ),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BlockedAccountsPage())),
+              icon: const Icon(Icons.block, size: 18),
+              label: const Text('الحسابات المحظورة'),
+            ),
           ]);
         },
       ),
@@ -1856,6 +1862,145 @@ class _ProfilePageState extends State<ProfilePage> {
     ]));
   }
 }
+class BlockedAccountsPage extends StatefulWidget {
+  const BlockedAccountsPage({super.key});
+  @override
+  State<BlockedAccountsPage> createState() => _BlockedAccountsPageState();
+}
+
+class _BlockedAccountsPageState extends State<BlockedAccountsPage> {
+  late Future<List<Map<String, dynamic>>> _blocked;
+  final Set<String> _busy = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _blocked = _loadBlocked();
+  }
+
+  Future<List<Map<String, dynamic>>> _loadBlocked() async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser!.id;
+    final rows = await client.from('user_blocks')
+        .select('blocked_id, created_at')
+        .eq('blocker_id', uid)
+        .order('created_at', ascending: false);
+    if (rows.isEmpty) return [];
+    final ids = rows.map((r) => r['blocked_id'].toString()).toList();
+    final profiles = await client.from('profiles')
+        .select('id, username, display_name, avatar_path')
+        .inFilter('id', ids);
+    final byId = {for (final p in profiles) p['id'].toString(): p};
+    return rows.map((r) {
+      final profile = byId[r['blocked_id'].toString()];
+      return <String, dynamic>{
+        'id': r['blocked_id'].toString(),
+        'created_at': r['created_at'],
+        'profile': profile,
+      };
+    }).toList();
+  }
+
+  Future<void> _unblock(Map<String, dynamic> item) async {
+    final id = item['id'].toString();
+    if (_busy.contains(id)) return;
+    final profile = item['profile'] as Map<String, dynamic>?;
+    final name = (profile?['username'] ?? 'هذا الحساب').toString();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إلغاء الحظر؟'),
+        content: Text('تريد ترفع الحظر عن @$name؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('إلغاء الحظر')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy.add(id));
+    try {
+      await Supabase.instance.client.from('user_blocks')
+          .delete()
+          .eq('blocker_id', Supabase.instance.client.auth.currentUser!.id)
+          .eq('blocked_id', id);
+      if (!mounted) return;
+      setState(() => _blocked = _loadBlocked());
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إلغاء الحظر')),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر إلغاء الحظر: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy.remove(id));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('الحسابات المحظورة'),
+      actions: [
+        IconButton(
+          tooltip: 'تحديث',
+          onPressed: () => setState(() => _blocked = _loadBlocked()),
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
+    ),
+    body: FutureBuilder<List<Map<String, dynamic>>>(
+      future: _blocked,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: accent));
+        }
+        if (snapshot.hasError) {
+          return Center(child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text('تعذر تحميل الحسابات المحظورة: ${snapshot.error}', textAlign: TextAlign.center),
+          ));
+        }
+        final rows = snapshot.data ?? [];
+        if (rows.isEmpty) {
+          return const Center(child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.verified_user_outlined, size: 56, color: accent),
+              SizedBox(height: 12),
+              Text('ما عندك حسابات محظورة'),
+              SizedBox(height: 6),
+              Text('الحسابات التي تحظرها راح تظهر هنا', style: TextStyle(color: Colors.white54)),
+            ],
+          ));
+        }
+        return ListView.separated(
+          itemCount: rows.length,
+          separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+          itemBuilder: (context, index) {
+            final item = rows[index];
+            final profile = item['profile'] as Map<String, dynamic>?;
+            final username = (profile?['username'] ?? 'user').toString();
+            final displayName = (profile?['display_name'] ?? username).toString();
+            return ListTile(
+              leading: VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 22),
+              title: Text('@$username'),
+              subtitle: Text(displayName),
+              trailing: TextButton(
+                onPressed: _busy.contains(item['id']) ? null : () => _unblock(item),
+                child: _busy.contains(item['id'])
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text('إلغاء الحظر'),
+              ),
+            );
+          },
+        );
+      },
+    ),
+  );
+}
+
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
   @override
