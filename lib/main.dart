@@ -1078,11 +1078,72 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   late Future<Map<String, int>> _stats;
+  late Future<Map<String, dynamic>> _profile;
+  bool _editing = false;
 
   @override
   void initState() {
     super.initState();
     _stats = _loadStats();
+    _profile = _loadProfile();
+  }
+
+  Future<Map<String, dynamic>> _loadProfile() async {
+    final user = Supabase.instance.client.auth.currentUser!;
+    final row = await Supabase.instance.client.from('profiles')
+      .select('username, display_name, bio')
+      .eq('id', user.id).maybeSingle();
+    return row ?? {
+      'username': user.userMetadata?['username'] ?? 'user',
+      'display_name': user.userMetadata?['display_name'] ?? 'عضو جديد',
+      'bio': '',
+    };
+  }
+
+  Future<void> _editProfile(Map<String, dynamic> current) async {
+    final username = TextEditingController(text: current['username']?.toString() ?? '');
+    final displayName = TextEditingController(text: current['display_name']?.toString() ?? '');
+    final bio = TextEditingController(text: current['bio']?.toString() ?? '');
+    final formKey = GlobalKey<FormState>();
+    final save = await showModalBottomSheet<bool>(
+      context: context, isScrollControlled: true, backgroundColor: const Color(0xFF171720),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, refresh) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(18, 18, 18, MediaQuery.of(ctx).viewInsets.bottom + 18),
+          child: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('تعديل الملف الشخصي', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 14),
+            TextFormField(controller: username, decoration: const InputDecoration(labelText: 'اسم المستخدم'), validator: (v) => (v == null || v.trim().length < 3) ? 'اكتب 3 أحرف على الأقل' : null),
+            TextFormField(controller: displayName, decoration: const InputDecoration(labelText: 'الاسم الظاهر'), validator: (v) => (v == null || v.trim().isEmpty) ? 'الاسم مطلوب' : null),
+            TextFormField(controller: bio, maxLength: 160, maxLines: 3, decoration: const InputDecoration(labelText: 'نبذة عنك')),
+            const SizedBox(height: 12),
+            FilledButton(onPressed: () {
+              if (formKey.currentState!.validate()) Navigator.pop(ctx, true);
+            }, style: FilledButton.styleFrom(backgroundColor: accent, minimumSize: const Size.fromHeight(46)), child: const Text('حفظ التغييرات')),
+          ])),
+        ),
+      )),
+    );
+    if (save == true) {
+      setState(() => _editing = true);
+      try {
+        await Supabase.instance.client.from('profiles').update({
+          'username': username.text.trim(),
+          'display_name': displayName.text.trim(),
+          'bio': bio.text.trim(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', Supabase.instance.client.auth.currentUser!.id);
+        if (mounted) {
+          setState(() => _profile = _loadProfile());
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم تحديث ملفك الشخصي 💜')));
+        }
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر تحديث الملف: $e')));
+      } finally {
+        if (mounted) setState(() => _editing = false);
+      }
+    }
+    username.dispose(); displayName.dispose(); bio.dispose();
   }
 
   Future<Map<String, int>> _loadStats() async {
@@ -1104,18 +1165,33 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
-    final metadata = user?.userMetadata ?? {};
-    final username = (metadata['username'] ?? 'عضو جديد').toString();
-    final displayName = (metadata['display_name'] ?? username).toString();
     return SafeArea(child: Column(children: [
-      const SizedBox(height: 34),
+      const SizedBox(height: 24),
       const CircleAvatar(radius: 46, backgroundColor: accent, child: Icon(Icons.person, size: 48, color: Colors.white)),
       const SizedBox(height: 12),
-      Text('@$username', style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-      Text(displayName, style: const TextStyle(color: Colors.white70)),
+      FutureBuilder<Map<String, dynamic>>(
+        future: _profile,
+        builder: (context, snapshot) {
+          final p = snapshot.data ?? {};
+          final username = (p['username'] ?? 'user').toString();
+          final displayName = (p['display_name'] ?? username).toString();
+          final bio = (p['bio'] ?? '').toString();
+          return Column(children: [
+            Text('@$username', style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+            Text(displayName, style: const TextStyle(color: Colors.white70)),
+            if (bio.isNotEmpty) Padding(padding: const EdgeInsets.fromLTRB(24, 8, 24, 0), child: Text(bio, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60))),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _editing ? null : () => _editProfile(p),
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('تعديل الملف الشخصي'),
+            ),
+          ]);
+        },
+      ),
       if (user?.email != null)
         Text(user!.email!, style: const TextStyle(color: Colors.white38, fontSize: 12)),
-      const SizedBox(height: 24),
+      const SizedBox(height: 16),
       FutureBuilder<Map<String, int>>(
         future: _stats,
         builder: (context, snapshot) {
