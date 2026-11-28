@@ -2591,7 +2591,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<Map<String, dynamic>> _loadProfile() async {
     final user = Supabase.instance.client.auth.currentUser!;
     final row = await Supabase.instance.client.from('profiles')
-      .select('username, display_name, bio, avatar_path, is_private')
+      .select('username, display_name, bio, avatar_path, is_private, is_verified, verification_status')
       .eq('id', user.id).maybeSingle();
     return row ?? {
       'username': user.userMetadata?['username'] ?? 'user',
@@ -2600,6 +2600,25 @@ class _ProfilePageState extends State<ProfilePage> {
     };
   }
 
+
+  Future<void> _requestVerification() async {
+    try {
+      await Supabase.instance.client.rpc('request_vedoro_verification');
+      if (!mounted) return;
+      setState(() => _profile = _loadProfile());
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إرسال طلب التوثيق إلى الإدارة للمراجعة 💜')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final message = e.toString().toLowerCase().contains('100000')
+        ? 'لازم يكون عندك 100 ألف متابع على الأقل حتى تقدم طلب التوثيق.'
+        : e.toString().toLowerCase().contains('already')
+          ? 'عندك طلب توثيق معلّق أو حسابك موثّق بالفعل.'
+          : 'تعذر إرسال طلب التوثيق: $e';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
 
   Future<void> _changeAvatar() async {
     final user = Supabase.instance.client.auth.currentUser;
@@ -2804,8 +2823,25 @@ class _ProfilePageState extends State<ProfilePage> {
                 )),
               ]),
               const SizedBox(height: 8),
-              Text('@$username', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('@$username', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+                if (p['is_verified'] == true) ...[
+                  const SizedBox(width: 5),
+                  const Icon(Icons.verified_rounded, color: Color(0xFF36A3FF), size: 19),
+                ],
+              ]),
               Text(displayName, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              if (p['is_verified'] != true && p['verification_status'] != 'pending')
+                TextButton.icon(
+                  onPressed: _requestVerification,
+                  icon: const Icon(Icons.verified_outlined, size: 17),
+                  label: const Text('طلب توثيق الحساب'),
+                ),
+              if (p['verification_status'] == 'pending')
+                const Padding(
+                  padding: EdgeInsets.only(top: 5),
+                  child: Text('طلب التوثيق قيد مراجعة الإدارة', style: TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                ),
               if (p['is_private'] == true)
                 Padding(
                   padding: const EdgeInsets.only(top: 5),
