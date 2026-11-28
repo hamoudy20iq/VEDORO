@@ -490,14 +490,15 @@ class _FeedScreenState extends State<FeedScreen> {
       return Stack(children: [
         PageView.builder(
           scrollDirection: Axis.vertical,
+          allowImplicitScrolling: true,
           itemCount: videos.length,
           onPageChanged: (index) {
             setState(() => current = index);
             widget.onPageChanged(index);
           },
-          itemBuilder: (context, index) => VideoFeedItem(
+          itemBuilder: (context, index) => RepaintBoundary(child: VideoFeedItem(
             key: ValueKey(videos[index].url), video: videos[index], active: current == index,
-          ),
+          )),
         ),
         SafeArea(
           child: Padding(
