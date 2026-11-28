@@ -13,6 +13,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   url_launcher: ^6.3.3
   video_player: ^2.10.0
+  image_picker: ^1.2.4
   supabase_flutter: ^2.18.3
 
 dev_dependencies:
