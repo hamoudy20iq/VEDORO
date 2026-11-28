@@ -1741,7 +1741,7 @@ class _ChatPageState extends State<ChatPage> {
                       decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         if (!mine) Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
-                        if (rows[i]['media_type'] == 'image' && rows[i]['media_url'] != null)
+                        if (rows[i]['message_type'] == 'image' && rows[i]['media_url'] != null)
                           GestureDetector(
                             onTap: () => showDialog<void>(context: context, builder: (ctx) => Dialog(
                               backgroundColor: Colors.black,
