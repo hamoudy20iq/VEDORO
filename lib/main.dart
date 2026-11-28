@@ -1186,6 +1186,12 @@ class _ProfilePageState extends State<ProfilePage> {
               icon: const Icon(Icons.edit_outlined, size: 18),
               label: const Text('تعديل الملف الشخصي'),
             ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsPage())),
+              icon: const Icon(Icons.notifications_none, size: 18),
+              label: const Text('الإشعارات'),
+            ),
           ]);
         },
       ),
@@ -1243,6 +1249,83 @@ class _ProfilePageState extends State<ProfilePage> {
     ]));
   }
 }
+class NotificationsPage extends StatefulWidget {
+  const NotificationsPage({super.key});
+  @override
+  State<NotificationsPage> createState() => _NotificationsPageState();
+}
+
+class _NotificationsPageState extends State<NotificationsPage> {
+  late final Stream<List<Map<String, dynamic>>> _notifications;
+
+  @override
+  void initState() {
+    super.initState();
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser!.id;
+    _notifications = client.from('notifications')
+        .stream(primaryKey: ['id'])
+        .eq('recipient_id', uid)
+        .order('created_at', ascending: false);
+  }
+
+  IconData _icon(String type) => switch (type) {
+    'follow' => Icons.person_add_alt_1,
+    'like' => Icons.favorite,
+    'comment' => Icons.mode_comment_outlined,
+    _ => Icons.notifications,
+  };
+
+  Future<void> _markRead(String id) async {
+    await Supabase.instance.client.from('notifications')
+        .update({'is_read': true}).eq('id', id);
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('الإشعارات')),
+    body: StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _notifications,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return Center(child: Text('تعذر تحميل الإشعارات: ${snapshot.error}'));
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: accent));
+        final rows = snapshot.data!;
+        if (rows.isEmpty) return const Center(child: Text('ما عندك إشعارات حالياً 💜'));
+        return ListView.separated(
+          itemCount: rows.length,
+          separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+          itemBuilder: (context, index) {
+            final row = rows[index];
+            final type = (row['type'] ?? '').toString();
+            final read = row['is_read'] == true;
+            return ListTile(
+              leading: CircleAvatar(
+                backgroundColor: accent.withValues(alpha: .18),
+                child: Icon(_icon(type), color: accent),
+              ),
+              title: Text(row['message']?.toString() ?? 'لديك إشعار جديد'),
+              subtitle: Text(row['created_at']?.toString().replaceFirst('T', ' ').split('.').first ?? ''),
+              trailing: read ? null : Container(
+                width: 9, height: 9,
+                decoration: const BoxDecoration(color: accent, shape: BoxShape.circle),
+              ),
+              tileColor: read ? null : accent.withValues(alpha: .06),
+              onTap: () async {
+                await _markRead(row['id'].toString());
+                if (row['post_id'] != null && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('تمت قراءة الإشعار')),
+                  );
+                }
+              },
+            );
+          },
+        );
+      },
+    ),
+  );
+}
+
 class _ProfilePostList extends StatelessWidget {
   const _ProfilePostList({required this.savedOnly});
   final bool savedOnly;
