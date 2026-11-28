@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 void main() => runApp(const VedoroApp());
@@ -89,10 +90,10 @@ class _MainScreenState extends State<MainScreen> {
   Widget build(BuildContext context) {
     final pages = [
       FeedScreen(onPageChanged: (i) => activeVideo = i),
-      const SimplePage(icon: Icons.explore_outlined, title: 'اكتشف', subtitle: 'قريباً ستجد هنا الفيديوهات والحسابات الرائجة.'),
+      const ExplorePage(),
       const SizedBox.shrink(),
-      const SimplePage(icon: Icons.chat_bubble_outline, title: 'الرسائل', subtitle: 'محادثاتك الخاصة ستظهر هنا بعد ربط الحسابات.'),
-      const SimplePage(icon: Icons.person_outline, title: 'الملف الشخصي', subtitle: 'ملفك الشخصي وفيديوهاتك ومتابعوك — قريباً.'),
+      const MessagesPage(),
+      const ProfilePage(),
     ];
     return Scaffold(
       body: IndexedStack(index: tab, children: pages),
@@ -163,6 +164,8 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   bool following = false;
   bool showControls = false;
   bool failed = false;
+  bool muted = false;
+  final List<String> comments = [];
 
   @override
   void initState() {
@@ -214,23 +217,33 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF171720),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: SizedBox(
-          height: 390,
-          child: Column(children: [
-            const SizedBox(height: 18),
-            const Text('التعليقات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const Divider(color: Colors.white12),
-            const Expanded(child: Center(child: Text('كن أول من يعلّق على هذا الفيديو', style: TextStyle(color: Colors.white54)))),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
-              child: Row(children: [
-                Expanded(child: TextField(controller: input, decoration: InputDecoration(hintText: 'اكتب تعليقاً...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
-                IconButton(onPressed: () { Navigator.pop(context); }, icon: const Icon(Icons.send, color: accent)),
-              ]),
-            ),
-          ]),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, refreshSheet) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+          child: SizedBox(
+            height: 430,
+            child: Column(children: [
+              const SizedBox(height: 18),
+              Text('التعليقات ${comments.length}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Divider(color: Colors.white12),
+              Expanded(child: comments.isEmpty
+                ? const Center(child: Text('كن أول من يعلّق على هذا الفيديو', style: TextStyle(color: Colors.white54)))
+                : ListView.builder(itemCount: comments.length, itemBuilder: (_, i) => ListTile(leading: const CircleAvatar(child: Icon(Icons.person)), title: Text(comments[i])))),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
+                child: Row(children: [
+                  Expanded(child: TextField(controller: input, textInputAction: TextInputAction.send, onSubmitted: (_) {
+                    final value = input.text.trim();
+                    if (value.isNotEmpty) { setState(() => comments.add(value)); input.clear(); refreshSheet(() {}); }
+                  }, decoration: InputDecoration(hintText: 'اكتب تعليقاً...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
+                  IconButton(onPressed: () {
+                    final value = input.text.trim();
+                    if (value.isNotEmpty) { setState(() => comments.add(value)); input.clear(); refreshSheet(() {}); }
+                  }, icon: const Icon(Icons.send, color: accent)),
+                ]),
+              ),
+            ]),
+          ),
         ),
       ),
     ).whenComplete(input.dispose);
@@ -262,9 +275,9 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
             const SizedBox(height: 20),
             _ActionButton(icon: Icons.mode_comment_outlined, label: 'تعليق', onTap: showComments),
             const SizedBox(height: 20),
-            _ActionButton(icon: Icons.share_outlined, label: 'مشاركة', onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مشاركة الفيديو ستُفعّل قريباً')))),
+            _ActionButton(icon: Icons.share_outlined, label: 'مشاركة', onTap: () async { await Clipboard.setData(ClipboardData(text: widget.video.url)); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ رابط الفيديو'))); }),
             const SizedBox(height: 20),
-            _ActionButton(icon: Icons.music_note, label: 'الصوت', onTap: () {}),
+            _ActionButton(icon: muted ? Icons.volume_off : Icons.music_note, label: muted ? 'صامت' : 'الصوت', onTap: () async { setState(() => muted = !muted); if (controller?.value.isInitialized == true) await controller!.setVolume(muted ? 0 : 1); }),
           ]),
         ),
         Positioned(
@@ -311,6 +324,73 @@ class _ActionButton extends StatelessWidget {
       Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, shadows: [Shadow(color: Colors.black, blurRadius: 5)])),
     ]),
   );
+}
+
+
+class ExplorePage extends StatefulWidget {
+  const ExplorePage({super.key});
+  @override
+  State<ExplorePage> createState() => _ExplorePageState();
+}
+class _ExplorePageState extends State<ExplorePage> {
+  String query = '';
+  final creators = const ['@vedoro', '@creator', '@iraq_video', '@daily_story'];
+  @override
+  Widget build(BuildContext context) {
+    final results = creators.where((name) => name.toLowerCase().contains(query.toLowerCase())).toList();
+    return SafeArea(child: Padding(
+      padding: const EdgeInsets.all(18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('اكتشف', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 16),
+        TextField(onChanged: (v) => setState(() => query = v), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'ابحث عن حساب...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none))),
+        const SizedBox(height: 18),
+        const Text('حسابات مقترحة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+        Expanded(child: ListView(children: results.map((name) => ListTile(leading: const CircleAvatar(backgroundColor: accent, child: Icon(Icons.person, color: Colors.white)), title: Text(name), subtitle: const Text('صانع محتوى على VEDORO'), trailing: const Icon(Icons.chevron_right))).toList())),
+      ]),
+    ));
+  }
+}
+
+class MessagesPage extends StatelessWidget {
+  const MessagesPage({super.key});
+  @override
+  Widget build(BuildContext context) => SafeArea(child: Column(children: [
+    const Padding(padding: EdgeInsets.all(20), child: Align(alignment: Alignment.centerRight, child: Text('الرسائل', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)))),
+    const ListTile(leading: CircleAvatar(child: Icon(Icons.person)), title: Text('فريق VEDORO'), subtitle: Text('أهلاً بك في مجتمع VEDORO'), trailing: Text('')),
+    const Divider(color: Colors.white12),
+    const Expanded(child: Center(child: Text('محادثاتك الخاصة ستظهر هنا بعد تسجيل الدخول وربط الرسائل.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54)))),
+  ]));
+}
+
+class ProfilePage extends StatelessWidget {
+  const ProfilePage({super.key});
+  @override
+  Widget build(BuildContext context) => SafeArea(child: Column(children: [
+    const SizedBox(height: 34),
+    const CircleAvatar(radius: 46, backgroundColor: accent, child: Icon(Icons.person, size: 48, color: Colors.white)),
+    const SizedBox(height: 12),
+    const Text('@vedoro_user', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+    const Text('عضو جديد في VEDORO', style: TextStyle(color: Colors.white54)),
+    const SizedBox(height: 24),
+    const Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+      _ProfileStat(value: '0', label: 'فيديو'),
+      _ProfileStat(value: '0', label: 'متابعون'),
+      _ProfileStat(value: '0', label: 'يتابع'),
+    ]),
+    const Divider(height: 34, color: Colors.white12),
+    const Expanded(child: Center(child: Text('سجّل الدخول حتى تنشئ ملفك وتنشر فيديوهاتك.', style: TextStyle(color: Colors.white54)))),
+  ]));
+}
+class _ProfileStat extends StatelessWidget {
+  const _ProfileStat({required this.value, required this.label});
+  final String value;
+  final String label;
+  @override
+  Widget build(BuildContext context) => Column(children: [
+    Text(value, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+    Text(label, style: const TextStyle(color: Colors.white54)),
+  ]);
 }
 
 class SimplePage extends StatelessWidget {
