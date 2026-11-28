@@ -1555,6 +1555,7 @@ class _ChatPageState extends State<ChatPage> {
   late Future<List<Map<String, dynamic>>> _messages;
   bool _sending = false;
   RealtimeChannel? _channel;
+  static const _reactionEmojis = ['❤️', '😂', '😮', '😢', '🔥', '👏'];
   @override
   void initState() {
     super.initState();
@@ -1565,6 +1566,12 @@ class _ChatPageState extends State<ChatPage> {
         schema: 'public',
         table: 'messages',
         filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'conversation_id', value: widget.conversationId),
+        callback: (_) { if (mounted) setState(() => _messages = _load()); },
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'message_reactions',
         callback: (_) { if (mounted) setState(() => _messages = _load()); },
       )..subscribe();
   }
@@ -1604,7 +1611,64 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
     }
+    if (messages.isNotEmpty) {
+      final messageIds = messages.map((m) => m['id'].toString()).toList();
+      final reactionRows = await client.from('message_reactions')
+          .select('message_id,user_id,emoji')
+          .inFilter('message_id', messageIds);
+      final grouped = <String, List<Map<String, dynamic>>>{};
+      for (final reaction in reactionRows) {
+        grouped.putIfAbsent(reaction['message_id'].toString(), () => []).add(Map<String, dynamic>.from(reaction));
+      }
+      for (final message in messages) {
+        message['reactions'] = grouped[message['id'].toString()] ?? <Map<String, dynamic>>[];
+      }
+    }
     return messages;
+  }
+  Future<void> _toggleReaction(String messageId, String emoji) async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final existing = await client.from('message_reactions')
+          .select('id')
+          .eq('message_id', messageId)
+          .eq('user_id', uid)
+          .eq('emoji', emoji)
+          .maybeSingle();
+      if (existing != null) {
+        await client.from('message_reactions').delete().eq('id', existing['id']);
+      } else {
+        await client.from('message_reactions').insert({
+          'message_id': messageId, 'user_id': uid, 'emoji': emoji,
+        });
+      }
+      if (mounted) setState(() => _messages = _load());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر إضافة التفاعل: $e')),
+      );
+    }
+  }
+  Future<void> _showReactions(String messageId) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF171720),
+      builder: (ctx) => SafeArea(child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: _reactionEmojis.map((emoji) => InkWell(
+            onTap: () { Navigator.pop(ctx); _toggleReaction(messageId, emoji); },
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(emoji, style: const TextStyle(fontSize: 30)),
+            ),
+          )).toList(),
+        ),
+      )),
+    );
   }
   Future<void> _pickAndSendMedia(bool video) async {
     final user = Supabase.instance.client.auth.currentUser;
@@ -1737,7 +1801,9 @@ class _ChatPageState extends State<ChatPage> {
                   child: Row(mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.end, children: [
                     if (!mine) ...[VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 15), const SizedBox(width: 7)],
-                    Flexible(child: Container(padding: const EdgeInsets.all(12), constraints: const BoxConstraints(maxWidth: 280),
+                    Flexible(child: GestureDetector(
+                      onLongPress: () => _showReactions(rows[i]['id'].toString()),
+                      child: Container(padding: const EdgeInsets.all(12), constraints: const BoxConstraints(maxWidth: 280),
                       decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         if (!mine) Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
@@ -1772,7 +1838,36 @@ class _ChatPageState extends State<ChatPage> {
                             style: TextStyle(fontSize: 10, color: rows[i]['read_at'] == null ? Colors.white54 : const Color(0xFFBFA4FF)),
                           ),
                         ),
+                        if ((rows[i]['reactions'] as List? ?? []).isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 7),
+                            child: Wrap(
+                              spacing: 5,
+                              runSpacing: 4,
+                              children: (() {
+                                final reactions = rows[i]['reactions'] as List;
+                                final counts = <String, int>{};
+                                for (final reaction in reactions) {
+                                  final emoji = reaction['emoji'].toString();
+                                  counts[emoji] = (counts[emoji] ?? 0) + 1;
+                                }
+                                return counts.entries.map((entry) => InkWell(
+                                  onTap: () => _toggleReaction(rows[i]['id'].toString(), entry.key),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: reactions.any((r) => r['emoji'] == entry.key && r['user_id'] == uid)
+                                          ? accent.withValues(alpha: .3) : Colors.black26,
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Text('${entry.key} ${entry.value}', style: const TextStyle(fontSize: 12)),
+                                  ),
+                                )).toList();
+                              })(),
+                            ),
+                          ),
                       ]))),
+                    )),
                     if (mine) ...[const SizedBox(width: 7), VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 15)],
                   ]));
               },
