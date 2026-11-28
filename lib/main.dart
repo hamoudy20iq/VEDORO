@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
@@ -1554,6 +1555,10 @@ class _ChatPageState extends State<ChatPage> {
   final _input = TextEditingController();
   late Future<List<Map<String, dynamic>>> _messages;
   bool _sending = false;
+  bool _otherTyping = false;
+  Map<String, dynamic>? _replyTo;
+  Timer? _typingDebounce;
+  Timer? _typingExpiry;
   RealtimeChannel? _channel;
   static const _reactionEmojis = ['❤️', '😂', '😮', '😢', '🔥', '👏'];
   @override
@@ -1573,17 +1578,27 @@ class _ChatPageState extends State<ChatPage> {
         schema: 'public',
         table: 'message_reactions',
         callback: (_) { if (mounted) setState(() => _messages = _load()); },
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'chat_typing_status',
+        filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'conversation_id', value: widget.conversationId),
+        callback: (_) => _refreshTyping(),
       )..subscribe();
   }
   @override
   void dispose() {
+    _typingDebounce?.cancel();
+    _typingExpiry?.cancel();
+    _publishTyping(false);
     _input.dispose();
     if (_channel != null) Supabase.instance.client.removeChannel(_channel!);
     super.dispose();
   }
   Future<List<Map<String, dynamic>>> _load() async {
     final client = Supabase.instance.client;
-    final rows = await client.from('messages').select('id, sender_id, body, created_at, read_at, message_type, media_path, media_mime')
+    final rows = await client.from('messages').select('id, sender_id, body, created_at, read_at, message_type, media_path, media_mime, reply_to_message_id')
       .eq('conversation_id', widget.conversationId).order('created_at');
     final messages = List<Map<String, dynamic>>.from(rows);
     final unreadIds = messages.where((m) => m['sender_id'] != client.auth.currentUser!.id && m['read_at'] == null)
@@ -1600,6 +1615,15 @@ class _ChatPageState extends State<ChatPage> {
       final profiles = await client.from('profiles').select('id, username, avatar_path').inFilter('id', ids);
       final byId = {for (final p in profiles) p['id'].toString(): p};
       for (final message in messages) { message['sender_profile'] = byId[message['sender_id'].toString()]; }
+    }
+    final replyIds = messages.map((m) => m['reply_to_message_id']).where((v) => v != null).map((v) => v.toString()).toSet().toList();
+    if (replyIds.isNotEmpty) {
+      final replyRows = await client.from('messages').select('id,body,message_type').inFilter('id', replyIds);
+      final replyMap = {for (final r in replyRows) r['id'].toString(): r};
+      for (final message in messages) {
+        final replyId = message['reply_to_message_id']?.toString();
+        if (replyId != null) message['reply_message'] = replyMap[replyId];
+      }
     }
     for (final message in messages) {
       final path = message['media_path']?.toString();
@@ -1625,6 +1649,70 @@ class _ChatPageState extends State<ChatPage> {
       }
     }
     return messages;
+  }
+  Future<void> _publishTyping(bool typing) async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      await Supabase.instance.client.from('chat_typing_status').upsert({
+        'conversation_id': widget.conversationId,
+        'user_id': uid,
+        'is_typing': typing,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    } catch (_) {}
+  }
+  void _handleTyping(String value) {
+    _typingDebounce?.cancel();
+    _typingExpiry?.cancel();
+    if (value.trim().isEmpty) {
+      _publishTyping(false);
+      return;
+    }
+    _typingDebounce = Timer(const Duration(milliseconds: 450), () => _publishTyping(true));
+    _typingExpiry = Timer(const Duration(seconds: 3), () => _publishTyping(false));
+  }
+  Future<void> _refreshTyping() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('chat_typing_status')
+          .select('user_id,is_typing,updated_at')
+          .eq('conversation_id', widget.conversationId)
+          .neq('user_id', uid);
+      final now = DateTime.now().toUtc();
+      final active = rows.any((r) {
+        if (r['is_typing'] != true) return false;
+        final updated = DateTime.tryParse(r['updated_at'].toString());
+        return updated != null && now.difference(updated).inSeconds < 5;
+      });
+      if (mounted && active != _otherTyping) setState(() => _otherTyping = active);
+    } catch (_) {}
+  }
+  Future<void> _deleteMessage(String messageId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف الرسالة؟'),
+        content: const Text('سيتم حذف الرسالة من المحادثة.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await Supabase.instance.client.from('messages').delete().eq('id', messageId);
+      if (mounted) setState(() => _messages = _load());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر حذف الرسالة: $e')),
+      );
+    }
+  }
+  void _startReply(Map<String, dynamic> message) {
+    setState(() => _replyTo = message);
   }
   Future<void> _toggleReaction(String messageId, String emoji) async {
     final client = Supabase.instance.client;
@@ -1657,7 +1745,37 @@ class _ChatPageState extends State<ChatPage> {
       backgroundColor: const Color(0xFF171720),
       builder: (ctx) => SafeArea(child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
-        child: Row(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: _reactionEmojis.map((emoji) => InkWell(
+              onTap: () { Navigator.pop(ctx); _toggleReaction(messageId, emoji); },
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(emoji, style: const TextStyle(fontSize: 30)),
+              ),
+            )).toList(),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.reply, color: accent),
+            title: const Text('الرد على الرسالة'),
+            onTap: () {
+              Navigator.pop(ctx);
+              final message = _messages is Future<List<Map<String, dynamic>>> ? null : null;
+              _load().then((rows) {
+                final found = rows.where((m) => m['id'].toString() == messageId).firstOrNull;
+                if (found != null && mounted) _startReply(found);
+              });
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            title: const Text('حذف الرسالة'),
+            onTap: () { Navigator.pop(ctx); _deleteMessage(messageId); },
+          ),
+        ]),
+      )),
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: _reactionEmojis.map((emoji) => InkWell(
             onTap: () { Navigator.pop(ctx); _toggleReaction(messageId, emoji); },
@@ -1768,9 +1886,11 @@ class _ChatPageState extends State<ChatPage> {
     try {
       await Supabase.instance.client.from('messages').insert({
         'conversation_id': widget.conversationId, 'sender_id': user.id, 'body': body,
+        if (_replyTo != null) 'reply_to_message_id': _replyTo!['id'],
       });
       _input.clear();
-      if (mounted) setState(() => _messages = _load());
+      _publishTyping(false);
+      if (mounted) setState(() { _replyTo = null; _messages = _load(); });
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر إرسال الرسالة: $e')));
     } finally { if (mounted) setState(() => _sending = false); }
@@ -1807,6 +1927,16 @@ class _ChatPageState extends State<ChatPage> {
                       decoration: BoxDecoration(color: mine ? accent.withValues(alpha: .35) : Colors.white12, borderRadius: BorderRadius.circular(16)),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         if (!mine) Text('@${profile?['username'] ?? 'user'}', style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                        if (rows[i]['reply_message'] != null)
+                          Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 7),
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+                            child: Text('↪ ${rows[i]['reply_message']['body'] ?? 'مرفق'}',
+                              maxLines: 2, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                          ),
                         if (rows[i]['message_type'] == 'image' && rows[i]['media_url'] != null)
                           GestureDetector(
                             onTap: () => showDialog<void>(context: context, builder: (ctx) => Dialog(
@@ -1876,8 +2006,20 @@ class _ChatPageState extends State<ChatPage> {
         )),
         SafeArea(child: Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 12), child: Row(children: [
           IconButton(onPressed: _sending ? null : _showMediaOptions, icon: const Icon(Icons.add_circle_outline, color: accent)),
-          Expanded(child: TextField(controller: _input, textInputAction: TextInputAction.send,
+          Expanded(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            if (_otherTyping) const Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.only(left: 12, bottom: 4), child: Text('يكتب الآن...', style: TextStyle(color: accent, fontSize: 11)))),
+            if (_replyTo != null) Container(
+              margin: const EdgeInsets.only(bottom: 6), padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(color: accent.withValues(alpha: .16), borderRadius: BorderRadius.circular(10)),
+              child: Row(children: [
+                Expanded(child: Text('الرد على: ${_replyTo!['body'] ?? 'مرفق'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11))),
+                IconButton(onPressed: () => setState(() => _replyTo = null), icon: const Icon(Icons.close, size: 16)),
+              ]),
+            ),
+            TextField(controller: _input, textInputAction: TextInputAction.send,
+            onChanged: _handleTyping,
             onSubmitted: (_) => _send(), decoration: InputDecoration(hintText: 'اكتب رسالة...', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none)))),
+          ])),
           IconButton(onPressed: _sending ? null : _send, icon: const Icon(Icons.send, color: accent)),
         ]))),
       ]),
