@@ -361,6 +361,25 @@ class _FeedScreenState extends State<FeedScreen> {
       commentCounts[id] = (commentCounts[id] ?? 0) + 1;
     }
 
+    final popularity = <String, int>{};
+    for (final id in postIds) {
+      popularity[id] = (likeCounts[id] ?? 0) * 3 + (commentCounts[id] ?? 0) * 2;
+    }
+    final now = DateTime.now().toUtc();
+    visibleRows.sort((a, b) {
+      double score(Map<String, dynamic> row) {
+        final id = row['id'].toString();
+        final author = row['author_id'].toString();
+        final created = DateTime.tryParse(row['created_at']?.toString() ?? '')?.toUtc() ?? now;
+        final ageHours = now.difference(created).inHours.clamp(0, 24 * 30);
+        final freshness = (720 - ageHours) / 24;
+        final followBoost = followedUsers.contains(author) ? 12.0 : 0.0;
+        final ownBoost = author == user.id ? 2.0 : 0.0;
+        return (popularity[id] ?? 0).toDouble() + freshness + followBoost + ownBoost;
+      }
+      return score(b).compareTo(score(a));
+    });
+
     final result = <DemoVideo>[];
     for (final row in visibleRows) {
       final path = row['media_path'] as String?;
@@ -466,6 +485,9 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   Map<String, dynamic>? _replyTo;
   bool commentsLoading = false;
   bool actionBusy = false;
+  Timer? _viewTimer;
+  String? _viewRecordId;
+  int _watchedMs = 0;
 
   @override
   void initState() {
@@ -480,7 +502,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
       ..initialize().then((_) {
         if (!mounted) return;
         setState(() {});
-        if (widget.active) controller!.play();
+        if (widget.active) { controller!.play(); _startViewTracking(); }
       }).catchError((_) {
         if (mounted) setState(() => failed = true);
       });
@@ -492,6 +514,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     if (oldWidget.active != widget.active && controller?.value.isInitialized == true) {
       if (widget.active) {
         controller!.play();
+        _startViewTracking();
       } else {
         controller!.pause();
       }
@@ -500,8 +523,45 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
 
   @override
   void dispose() {
+    _viewTimer?.cancel();
+    _saveViewProgress();
     controller?.dispose();
     super.dispose();
+  }
+
+  void _startViewTracking() {
+    if (_viewTimer != null || widget.video.postId == null) return;
+    _viewTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || !widget.active || controller?.value.isPlaying != true) return;
+      _watchedMs += 5000;
+      _saveViewProgress();
+    });
+  }
+
+  Future<void> _saveViewProgress() async {
+    final postId = widget.video.postId;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (postId == null || user == null || _watchedMs <= 0) return;
+    try {
+      final duration = controller?.value.duration.inMilliseconds ?? 0;
+      final completed = duration > 0 && _watchedMs >= duration * 0.9;
+      if (_viewRecordId == null) {
+        final inserted = await Supabase.instance.client.from('post_views').insert({
+          'post_id': postId,
+          'viewer_id': user.id,
+          'watch_duration_ms': _watchedMs,
+          'video_duration_ms': duration > 0 ? duration : null,
+          'completed': completed,
+        }).select('id').single();
+        _viewRecordId = inserted['id'].toString();
+      } else {
+        await Supabase.instance.client.from('post_views').update({
+          'watch_duration_ms': _watchedMs,
+          'video_duration_ms': duration > 0 ? duration : null,
+          'completed': completed,
+        }).eq('id', _viewRecordId!).eq('viewer_id', user.id);
+      }
+    } catch (_) {}
   }
 
   void togglePlayback() {
