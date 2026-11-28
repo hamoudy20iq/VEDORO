@@ -589,6 +589,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
   VideoPlayerController? controller;
   late bool liked;
   late bool following;
+  bool followRequestSent = false;
   late int likeCount;
   late int commentCount;
   bool showControls = false;
@@ -611,6 +612,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     super.initState();
     liked = widget.video.isLiked;
     following = widget.video.isFollowing;
+    _loadFollowRequestState();
     likeCount = widget.video.likeCount;
     commentCount = widget.video.commentCount;
     _loadSavedState();
@@ -889,23 +891,55 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
     }
   }
 
+  Future<void> _loadFollowRequestState() async {
+    final authorId = widget.video.authorId;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (authorId == null || uid == null || authorId == uid || following) return;
+    try {
+      final request = await Supabase.instance.client.from('follow_requests')
+          .select('id').eq('requester_id', uid).eq('target_id', authorId)
+          .eq('status', 'pending').maybeSingle();
+      if (mounted) setState(() => followRequestSent = request != null);
+    } catch (_) {}
+  }
+
   Future<void> _toggleFollow() async {
     final authorId = widget.video.authorId;
     final user = Supabase.instance.client.auth.currentUser;
     if (authorId == null || user == null || authorId == user.id || actionBusy) return;
     final wasFollowing = following;
-    setState(() { following = !wasFollowing; actionBusy = true; });
+    final hadRequest = followRequestSent;
+    setState(() => actionBusy = true);
     try {
       if (wasFollowing) {
         await Supabase.instance.client.from('follows')
             .delete().eq('follower_id', user.id).eq('followed_id', authorId);
+        if (mounted) setState(() => following = false);
       } else {
-        await Supabase.instance.client.from('follows')
-            .insert({'follower_id': user.id, 'followed_id': authorId});
+        final profile = await Supabase.instance.client.from('profiles')
+            .select('is_private').eq('id', authorId).maybeSingle();
+        final isPrivate = profile?['is_private'] == true;
+        if (isPrivate) {
+          if (hadRequest) {
+            await Supabase.instance.client.from('follow_requests').delete()
+                .eq('requester_id', user.id).eq('target_id', authorId)
+                .eq('status', 'pending');
+            if (mounted) setState(() => followRequestSent = false);
+          } else {
+            await Supabase.instance.client.from('follow_requests').insert({
+              'requester_id': user.id, 'target_id': authorId, 'status': 'pending',
+            });
+            if (mounted) setState(() => followRequestSent = true);
+          }
+        } else {
+          await Supabase.instance.client.from('follows')
+              .insert({'follower_id': user.id, 'followed_id': authorId});
+          if (mounted) setState(() => following = true);
+        }
       }
     } catch (e) {
       if (mounted) {
-        setState(() => following = wasFollowing);
+        setState(() { following = wasFollowing; followRequestSent = hadRequest; });
         _showActionError('تعذرت عملية المتابعة: $e');
       }
     } finally {
@@ -1061,7 +1095,7 @@ class _VideoFeedItemState extends State<VideoFeedItem> {
               OutlinedButton(
                 onPressed: _toggleFollow,
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white70), padding: const EdgeInsets.symmetric(horizontal: 12), minimumSize: const Size(0, 30)),
-                child: Text(following ? 'تتابعه' : 'متابعة'),
+                child: Text(following ? 'تتابعه' : (followRequestSent ? 'تم إرسال الطلب' : 'متابعة')),
               ),
             ]),
             const SizedBox(height: 8),
@@ -3009,6 +3043,11 @@ class _SettingsPageState extends State<SettingsPage> {
             activeColor: accent,
           ),
           _settingTile(
+            icon: Icons.person_add_alt_1_rounded, title: 'طلبات المتابعة',
+            subtitle: 'مراجعة طلبات الأشخاص لمتابعة حسابك الخاص',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FollowRequestsPage())),
+          ),
+          _settingTile(
             icon: Icons.block_rounded, title: 'الحسابات المحظورة',
             subtitle: 'عرض الحسابات التي حظرتها وإلغاء الحظر',
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BlockedAccountsPage())),
@@ -3071,6 +3110,131 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
   }
+}
+
+class FollowRequestsPage extends StatefulWidget {
+  const FollowRequestsPage({super.key});
+  @override
+  State<FollowRequestsPage> createState() => _FollowRequestsPageState();
+}
+
+class _FollowRequestsPageState extends State<FollowRequestsPage> {
+  late Future<List<Map<String, dynamic>>> _requests;
+  final Set<String> _busy = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _requests = _loadRequests();
+  }
+
+  Future<List<Map<String, dynamic>>> _loadRequests() async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser!.id;
+    final rows = await client.from('follow_requests')
+        .select('id, requester_id, created_at')
+        .eq('target_id', uid).eq('status', 'pending')
+        .order('created_at', ascending: false);
+    if (rows.isEmpty) return [];
+    final ids = rows.map((r) => r['requester_id'].toString()).toList();
+    final profiles = await client.from('profiles')
+        .select('id, username, display_name, avatar_path')
+        .inFilter('id', ids);
+    final byId = {for (final p in profiles) p['id'].toString(): p};
+    return rows.map((r) => <String, dynamic>{
+      'id': r['id'].toString(),
+      'requester_id': r['requester_id'].toString(),
+      'profile': byId[r['requester_id'].toString()],
+    }).toList();
+  }
+
+  Future<void> _respond(Map<String, dynamic> request, bool accept) async {
+    final id = request['id'].toString();
+    if (_busy.contains(id)) return;
+    setState(() => _busy.add(id));
+    try {
+      await Supabase.instance.client.rpc('respond_to_follow_request', params: {
+        'p_request_id': id, 'p_accept': accept,
+      });
+      if (!mounted) return;
+      setState(() => _requests = _loadRequests());
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(accept ? 'تم قبول طلب المتابعة' : 'تم رفض طلب المتابعة'),
+      ));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذرت معالجة الطلب: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy.remove(id));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('طلبات المتابعة'),
+      actions: [IconButton(
+        tooltip: 'تحديث',
+        onPressed: () => setState(() => _requests = _loadRequests()),
+        icon: const Icon(Icons.refresh),
+      )],
+    ),
+    body: FutureBuilder<List<Map<String, dynamic>>>(
+      future: _requests,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: accent));
+        }
+        if (snapshot.hasError) return Center(child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text('تعذر تحميل الطلبات: ${snapshot.error}', textAlign: TextAlign.center),
+        ));
+        final rows = snapshot.data ?? [];
+        if (rows.isEmpty) return const Center(child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.person_add_alt_1_outlined, size: 56, color: accent),
+            SizedBox(height: 12),
+            Text('ما عندك طلبات متابعة حالياً'),
+            SizedBox(height: 6),
+            Text('طلبات الحسابات الخاصة راح تظهر هنا', style: TextStyle(color: Colors.white54)),
+          ],
+        ));
+        return ListView.separated(
+          itemCount: rows.length,
+          separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+          itemBuilder: (context, index) {
+            final item = rows[index];
+            final profile = item['profile'] as Map<String, dynamic>?;
+            final username = (profile?['username'] ?? 'user').toString();
+            final displayName = (profile?['display_name'] ?? username).toString();
+            final busy = _busy.contains(item['id'].toString());
+            return ListTile(
+              leading: VedoroAvatar(path: profile?['avatar_path']?.toString(), radius: 23),
+              title: Text(displayName),
+              subtitle: Text('@$username', style: const TextStyle(color: Colors.white54)),
+              trailing: busy ? const SizedBox(
+                width: 22, height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2, color: accent),
+              ) : Wrap(spacing: 2, children: [
+                IconButton(
+                  tooltip: 'قبول',
+                  onPressed: () => _respond(item, true),
+                  icon: const Icon(Icons.check_circle, color: Colors.greenAccent),
+                ),
+                IconButton(
+                  tooltip: 'رفض',
+                  onPressed: () => _respond(item, false),
+                  icon: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
+                ),
+              ]),
+            );
+          },
+        );
+      },
+    ),
+  );
 }
 
 class BlockedAccountsPage extends StatefulWidget {
