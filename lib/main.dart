@@ -1462,14 +1462,18 @@ class ExplorePage extends StatefulWidget {
   @override
   State<ExplorePage> createState() => _ExplorePageState();
 }
+
 class _ExplorePageState extends State<ExplorePage> {
   final _search = TextEditingController();
+  int _tab = 0;
   Future<List<Map<String, dynamic>>>? _results;
+  late Future<List<Map<String, dynamic>>> _trending;
 
   @override
   void initState() {
     super.initState();
     _results = _searchUsers('');
+    _trending = _loadTrending();
   }
 
   @override
@@ -1478,31 +1482,199 @@ class _ExplorePageState extends State<ExplorePage> {
     super.dispose();
   }
 
+  Future<Set<String>> _blockedUsers(String currentId) async {
+    final rows = await Supabase.instance.client.from('user_blocks')
+      .select('blocker_id, blocked_id')
+      .or('blocker_id.eq.$currentId,blocked_id.eq.$currentId');
+    final blocked = <String>{};
+    for (final row in rows) {
+      final blocker = row['blocker_id'].toString();
+      final target = row['blocked_id'].toString();
+      blocked.add(blocker == currentId ? target : blocker);
+    }
+    return blocked;
+  }
+
   Future<List<Map<String, dynamic>>> _searchUsers(String value) async {
     final client = Supabase.instance.client;
     final currentId = client.auth.currentUser?.id;
+    if (currentId == null) return [];
     var request = client.from('profiles').select('id, username, avatar_path');
     if (value.trim().isNotEmpty) {
       request = request.ilike('username', '%${value.trim()}%');
     }
     final rows = await request.limit(50);
-    if (currentId == null) return [];
-    final blockRows = await client.from('user_blocks')
-        .select('blocker_id, blocked_id')
-        .or('blocker_id.eq.$currentId,blocked_id.eq.$currentId');
-    final blockedIds = <String>{};
-    for (final block in blockRows) {
-      final blocker = block['blocker_id'].toString();
-      final blocked = block['blocked_id'].toString();
-      blockedIds.add(blocker == currentId ? blocked : blocker);
-    }
+    final blocked = await _blockedUsers(currentId);
     return List<Map<String, dynamic>>.from(rows)
-      .where((row) => row['id'] != currentId && !blockedIds.contains(row['id'].toString()))
+      .where((row) => row['id'] != currentId && !blocked.contains(row['id'].toString()))
       .take(30).toList();
   }
 
+  Future<List<Map<String, dynamic>>> _loadTrending() async {
+    final client = Supabase.instance.client;
+    final since = DateTime.now().subtract(const Duration(days: 7)).toUtc().toIso8601String();
+    final rows = await client.from('post_hashtags')
+      .select('hashtag, post_id, posts!inner(id)')
+      .gte('created_at', since)
+      .limit(500);
+    final counts = <String, int>{};
+    for (final row in rows) {
+      final tag = row['hashtag'].toString();
+      counts[tag] = (counts[tag] ?? 0) + 1;
+    }
+    final sorted = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted.take(12).map((e) => {'hashtag': e.key, 'count': e.value}).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> _searchHashtags(String value) async {
+    final client = Supabase.instance.client;
+    final term = value.trim().replaceFirst(RegExp(r'^#'), '').toLowerCase();
+    var request = client.from('post_hashtags').select('hashtag, post_id');
+    if (term.isNotEmpty) request = request.ilike('hashtag', '%$term%');
+    final rows = await request.limit(500);
+    final counts = <String, int>{};
+    for (final row in rows) {
+      final tag = row['hashtag'].toString();
+      counts[tag] = (counts[tag] ?? 0) + 1;
+    }
+    final sorted = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted.take(40).map((e) => {'hashtag': e.key, 'count': e.value}).toList();
+  }
+
+  Future<List<DemoVideo>> _searchVideos(String value) async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) return [];
+    final blocked = await _blockedUsers(user.id);
+    var request = client.from('posts')
+      .select('id, author_id, caption, media_path, thumbnail_path, moderation_status, created_at')
+      .eq('post_type', 'video')
+      .eq('visibility', 'public')
+      .eq('moderation_status', 'approved');
+    final term = value.trim().replaceFirst(RegExp(r'^#'), '');
+    if (term.isNotEmpty && !value.trim().startsWith('#')) {
+      request = request.ilike('caption', '%$term%');
+    }
+    final rows = await request.order('created_at', ascending: false).limit(60);
+    final visible = rows.where((r) => !blocked.contains(r['author_id'].toString())).toList();
+    if (visible.isEmpty) return [];
+    final ids = visible.map((r) => r['author_id'] as String).toSet().toList();
+    final profiles = await client.from('profiles').select('id, username').inFilter('id', ids);
+    final names = {for (final p in profiles) p['id'].toString(): '@${p['username'] ?? 'user'}'};
+    final results = <DemoVideo>[];
+    for (final row in visible) {
+      final postId = row['id'].toString();
+      final authorId = row['author_id'].toString();
+      final path = row['media_path']?.toString() ?? '';
+      if (path.isEmpty) continue;
+      try {
+        final url = await client.storage.from('vedoro-videos').createSignedUrl(path, 3600);
+        String? thumbnail;
+        final thumbPath = row['thumbnail_path']?.toString();
+        if (thumbPath != null && thumbPath.isNotEmpty) {
+          try { thumbnail = await client.storage.from('vedoro-thumbnails').createSignedUrl(thumbPath, 3600); } catch (_) {}
+        }
+        results.add(DemoVideo(
+          postId: postId,
+          authorId: authorId,
+          url: url,
+          thumbnailUrl: thumbnail,
+          user: names[authorId] ?? '@vedoro',
+          caption: (row['caption'] ?? '').toString(),
+          music: 'الصوت الأصلي',
+          likes: '0',
+        ));
+      } catch (_) {}
+    }
+    if (value.trim().startsWith('#')) {
+      final tag = value.trim().substring(1).toLowerCase();
+      final tagged = await client.from('post_hashtags').select('post_id').eq('hashtag', tag);
+      final taggedIds = tagged.map((r) => r['post_id'].toString()).toSet();
+      return results.where((v) => taggedIds.contains(v.postId)).toList();
+    }
+    return results;
+  }
+
   void _onSearch(String value) {
-    setState(() => _results = _searchUsers(value));
+    setState(() {
+      if (_tab == 0) _results = _searchUsers(value);
+      if (_tab == 1) _results = _searchHashtags(value);
+      if (_tab == 2) _results = _searchVideos(value);
+    });
+  }
+
+  void _selectHashtag(String tag) {
+    setState(() {
+      _tab = 2;
+      _search.text = '#$tag';
+      _results = _searchVideos('#$tag');
+    });
+  }
+
+  Widget _userResults(List<Map<String, dynamic>> users) {
+    if (users.isEmpty) return const Center(child: Text('ما لقينا حسابات مطابقة.', style: TextStyle(color: Colors.white54)));
+    return ListView.separated(
+      itemCount: users.length,
+      separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+      itemBuilder: (context, index) {
+        final item = users[index];
+        final username = (item['username'] ?? 'user').toString();
+        return ListTile(
+          leading: VedoroAvatar(path: item['avatar_path']?.toString(), radius: 23),
+          title: Text('@$username', style: const TextStyle(fontWeight: FontWeight.bold)),
+          subtitle: const Text('عضو في VEDORO'),
+          trailing: const Icon(Icons.person_outline, color: Colors.white38),
+        );
+      },
+    );
+  }
+
+  Widget _hashtagResults(List<Map<String, dynamic>> tags) {
+    if (tags.isEmpty) return const Center(child: Text('ماكو هاشتاقات حالياً. أضف # إلى وصف فيديوك.', style: TextStyle(color: Colors.white54)));
+    return ListView.separated(
+      itemCount: tags.length,
+      separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+      itemBuilder: (context, index) {
+        final tag = tags[index];
+        return ListTile(
+          leading: const CircleAvatar(backgroundColor: Color(0x229B6DFF), child: Icon(Icons.tag, color: accent)),
+          title: Text('#${tag['hashtag']}', style: const TextStyle(fontWeight: FontWeight.bold)),
+          subtitle: Text('${tag['count']} منشور'),
+          trailing: const Icon(Icons.arrow_forward_ios, size: 15, color: Colors.white38),
+          onTap: () => _selectHashtag(tag['hashtag'].toString()),
+        );
+      },
+    );
+  }
+
+  Widget _videoResults(List<DemoVideo> videos) {
+    if (videos.isEmpty) return const Center(child: Text('ما لقينا فيديوهات. جرّب كلمة أو هاشتاق ثاني.', style: TextStyle(color: Colors.white54)));
+    return ListView.separated(
+      itemCount: videos.length,
+      separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+      itemBuilder: (context, index) {
+        final video = videos[index];
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
+          leading: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: SizedBox(width: 62, height: 76,
+              child: video.thumbnailUrl != null
+                ? Image.network(video.thumbnailUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const ColoredBox(color: Colors.white10, child: Icon(Icons.play_arrow)))
+                : const ColoredBox(color: Colors.white10, child: Icon(Icons.play_arrow))),
+          ),
+          title: Text(video.user, style: const TextStyle(fontWeight: FontWeight.bold)),
+          subtitle: Text(video.caption, maxLines: 2, overflow: TextOverflow.ellipsis),
+          trailing: const Icon(Icons.play_circle_outline, color: accent, size: 30),
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
+            Scaffold(backgroundColor: background, body: SafeArea(
+              child: VideoFeedItem(video: video, active: true),
+            )))),
+        );
+      },
+    );
   }
 
   @override
@@ -1510,7 +1682,7 @@ class _ExplorePageState extends State<ExplorePage> {
     padding: const EdgeInsets.all(18),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('اكتشف', style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 12),
+      const SizedBox(height: 10),
       const StoryTray(),
       const SizedBox(height: 10),
       TextField(
@@ -1518,7 +1690,7 @@ class _ExplorePageState extends State<ExplorePage> {
         onChanged: _onSearch,
         decoration: InputDecoration(
           prefixIcon: const Icon(Icons.search),
-          hintText: 'ابحث عن اسم المستخدم...',
+          hintText: _tab == 0 ? 'ابحث عن مستخدم...' : _tab == 1 ? 'ابحث عن هاشتاق...' : 'ابحث عن فيديو أو #هاشتاق...',
           suffixIcon: IconButton(icon: const Icon(Icons.close), onPressed: () {
             _search.clear();
             _onSearch('');
@@ -1527,10 +1699,42 @@ class _ExplorePageState extends State<ExplorePage> {
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
         ),
       ),
-      const SizedBox(height: 18),
-      const Text('مستخدمو VEDORO', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 8),
-      Expanded(child: FutureBuilder<List<Map<String, dynamic>>>(
+      const SizedBox(height: 12),
+      SegmentedButton<int>(
+        segments: const [
+          ButtonSegment(value: 0, label: Text('مستخدمون'), icon: Icon(Icons.people_outline)),
+          ButtonSegment(value: 1, label: Text('هاشتاقات'), icon: Icon(Icons.tag)),
+          ButtonSegment(value: 2, label: Text('فيديوهات'), icon: Icon(Icons.play_circle_outline)),
+        ],
+        selected: {_tab},
+        onSelectionChanged: (value) {
+          setState(() {
+            _tab = value.first;
+            _onSearch(_search.text);
+          });
+        },
+        showSelectedIcon: false,
+      ),
+      if (_tab == 0 && _search.text.isEmpty) ...[
+        const SizedBox(height: 12),
+        const Text('الهاشتاقات الرائجة هذا الأسبوع', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 5),
+        SizedBox(height: 42, child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _trending,
+          builder: (context, snap) {
+            final tags = snap.data ?? [];
+            if (tags.isEmpty) return const Align(alignment: Alignment.centerLeft, child: Text('ابدأ بإضافة هاشتاقات لفيديوهاتك', style: TextStyle(color: Colors.white38, fontSize: 12)));
+            return ListView(scrollDirection: Axis.horizontal, children: tags.map((tag) =>
+              Padding(padding: const EdgeInsets.only(right: 7), child: ActionChip(
+                label: Text('#${tag['hashtag']}'),
+                onPressed: () => _selectHashtag(tag['hashtag'].toString()),
+                backgroundColor: const Color(0x229B6DFF),
+              ))).toList());
+          },
+        )),
+      ],
+      const SizedBox(height: 10),
+      Expanded(child: FutureBuilder<List<dynamic>>(
         future: _results,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1539,24 +1743,10 @@ class _ExplorePageState extends State<ExplorePage> {
           if (snapshot.hasError) {
             return Center(child: Text('تعذر البحث: ${snapshot.error}', textAlign: TextAlign.center));
           }
-          final users = snapshot.data ?? [];
-          if (users.isEmpty) {
-            return const Center(child: Text('ما لقينا حسابات مطابقة. جرّب اسم ثاني.', style: TextStyle(color: Colors.white54)));
-          }
-          return ListView.separated(
-            itemCount: users.length,
-            separatorBuilder: (_, __) => const Divider(color: Colors.white12),
-            itemBuilder: (context, index) {
-              final item = users[index];
-              final username = (item['username'] ?? 'user').toString();
-              return ListTile(
-                leading: VedoroAvatar(path: item['avatar_path']?.toString(), radius: 23),
-                title: Text('@$username', style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: const Text('عضو في VEDORO'),
-                trailing: const Icon(Icons.verified_user_outlined, color: Colors.white38),
-              );
-            },
-          );
+          final rows = snapshot.data ?? [];
+          if (_tab == 0) return _userResults(rows.cast<Map<String, dynamic>>());
+          if (_tab == 1) return _hashtagResults(rows.cast<Map<String, dynamic>>());
+          return _videoResults(rows.cast<DemoVideo>());
         },
       )),
     ]),
