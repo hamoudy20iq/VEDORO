@@ -3398,9 +3398,20 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   IconData _icon(String type) => switch (type) {
     'follow' => Icons.person_add_alt_1,
+    'follow_request' => Icons.person_add_alt_rounded,
+    'follow_accepted' => Icons.verified_user_rounded,
+    'follow_rejected' => Icons.person_remove_alt_1_rounded,
     'like' => Icons.favorite,
     'comment' => Icons.mode_comment_outlined,
     _ => Icons.notifications,
+  };
+
+  Color _iconColor(String type) => switch (type) {
+    'follow_request' => Colors.amberAccent,
+    'follow_accepted' => Colors.greenAccent,
+    'follow_rejected' => Colors.redAccent,
+    'like' => Colors.pinkAccent,
+    _ => accent,
   };
 
   Future<void> _markRead(String id) async {
@@ -3442,7 +3453,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
             return ListTile(
               leading: CircleAvatar(
                 backgroundColor: accent.withValues(alpha: .18),
-                child: Icon(_icon(type), color: accent),
+                child: Icon(_icon(type), color: _iconColor(type)),
               ),
               title: Text(row['message']?.toString() ?? 'لديك إشعار جديد'),
               subtitle: Text(row['created_at']?.toString().replaceFirst('T', ' ').split('.').first ?? ''),
